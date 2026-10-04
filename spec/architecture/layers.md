@@ -3,7 +3,7 @@
 This repository holds three layers of one system and the author's shared library under all of
 them. Each becomes a repository of its own later; until then they share this one, laid out the way the
 repositories will be, so that the split is a copy and not a reorganization. The plan, step by step,
-is [../todo/milestones.md](../todo/milestones.md), F.
+is web's `spec/todo/milestones.md`, F.
 
 ## Four places, and which way they lean
 
@@ -26,7 +26,7 @@ built from the site's own libraries, and the probe and the schema it reads stay 
 ## The directory is the layer
 
 ```
-infra/apps/       infra/libs/
+apps/       libs/
 platform/apps/    platform/libs/
 services/apps/    services/libs/
 ```

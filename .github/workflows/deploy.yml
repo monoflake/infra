@@ -6,9 +6,6 @@ name: Deploy
 on:
   push:
     branches: [main]
-  # The first of each month rebuilds geo, whose image fetches GeoNames as it is built.
-  schedule:
-    - cron: "17 4 1 * *"
   workflow_dispatch:
     inputs:
       apps:
@@ -38,9 +35,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
           ASKED: ${{ inputs.apps }}
         run: |
-          if [ "$EVENT" = schedule ]; then
-            apps='["geo"]'
-          elif [ "$EVENT" = workflow_dispatch ] && [ -n "$ASKED" ]; then
+          if [ "$EVENT" = workflow_dispatch ] && [ -n "$ASKED" ]; then
             apps="$(printf '%s\n' $ASKED | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().split()))')"
           elif [ "$EVENT" = workflow_dispatch ] || [ -z "${BEFORE//0/}" ]; then
             apps="$(.mise/tasks/deployable --all)"
@@ -66,18 +61,15 @@ jobs:
           repository: canmi21/canmi
       - uses: actions/checkout@v7
         with:
-          path: repos/lattice
+          path: repos/infra
       # The runner's default builder cannot export an image as an archive; a container builder can.
       - uses: docker/setup-buildx-action@v4
       - env:
           APP: ${{ matrix.app }}
         run: |
           mkdir -p "$RUNNER_TEMP/deploy"
-          repos/lattice/.mise/tasks/image "$APP" "$RUNNER_TEMP/deploy/image.tar"
-          for root in apps infra/apps platform/apps services/apps; do
-            [ -d "repos/lattice/$root/$APP" ] && cp "repos/lattice/$root/$APP/service.toml" "$RUNNER_TEMP/deploy/"
-          done
-          [ -f "$RUNNER_TEMP/deploy/service.toml" ]
+          repos/infra/.mise/tasks/image "$APP" "$RUNNER_TEMP/deploy/image.tar"
+          cp "repos/infra/apps/$APP/service.toml" "$RUNNER_TEMP/deploy/"
       # The image layers are compressed already; the node needs it for as long as a deploy takes.
       - uses: actions/upload-artifact@v7
         with:

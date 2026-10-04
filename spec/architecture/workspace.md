@@ -45,8 +45,8 @@ a migration has got, how many components still do something -- nothing holds the
 writing one in the present tense promises that every change to the thing comes back and updates
 the sentence. That does not happen and will not. Dated, the figure stops being a claim that rots
 and becomes what it always was: a mark of how far something had got when somebody last counted.
-The spelling is "measured ... at the time", as [media.md](media.md) uses for its 39 records and
-[local.md](local.md) for its largest sidecar.
+The spelling is "measured ... at the time", as web's `spec/architecture/media.md` uses for its 39 records and
+web's `spec/architecture/local.md` for its largest sidecar.
 
 **A figure that is a value the code uses is not dated.** A constant, a threshold, a declared width
 -- these have to match the code exactly, and the answer to one drifting is a check, not a hedge.
@@ -65,7 +65,7 @@ what the generators write is marked `linguist-generated=true` in `.gitattributes
 hundred lines of stylesheet anybody wrote. `data/record/metadata.json` is written by `local
 image`, and `diagram.json` beside it by the model calls that describe each diagram; `data/build/`
 holds what a build derives; Drizzle writes its own snapshots. Each is tracked because a build
-reads it with nothing else present -- a record, not source. See [data.md](data.md), "What stays in
+reads it with nothing else present -- a record, not source. See web's `spec/architecture/data.md`, "What stays in
 git, and until when".
 
 **A glob for the fonts, not a list of families.** Adding a font is three steps and coming back
@@ -84,7 +84,7 @@ sees before editing it.
 
 A generated file over the hard limit that nobody marked fails the line check, which is how this
 list found one of its own entries pointing at a path the file had left. One under the limit goes
-on being counted and nothing fails; see [../todo/tooling.md](../todo/tooling.md).
+on being counted and nothing fails; see web's `spec/todo/tooling.md`.
 
 ## Layout
 
@@ -107,8 +107,8 @@ The layout is moving to three layers and the library under them, each laid out a
 it becomes; see [layers.md](layers.md).
 
 Which of `data/` git keeps, and what happens to an asset once it is stored, are their own
-subjects: [data.md](data.md), [media.md](media.md), [video/](video/),
-[fonts.md](fonts.md) and [delivery.md](delivery.md).
+subjects: web's `spec/architecture/data.md`, web's `spec/architecture/media.md`, web's `spec/architecture/video/`,
+web's `spec/architecture/fonts.md` and platform's `spec/architecture/delivery.md`.
 
 ## One name, one thing
 
@@ -124,7 +124,7 @@ The same applies to `apps/`. A Rust binary and a SvelteKit site sit side by side
 what they do. What a member may be called is the workspace's `naming.md`'s.
 
 How the command line and the HTTP surface divide one application between them is its own
-subject: [local.md](local.md).
+subject: web's `spec/architecture/local.md`.
 
 ## The editor is configured by reading the site, not by working it out again
 
@@ -139,7 +139,7 @@ each one renders something that is merely wrong rather than something that error
 Copying is the right instinct here and not a shortcut, because the two are converging. The
 account system is what lets the editor stop being a second origin; after it, these become one
 router rather than two, and configuration that already agrees is configuration that does not
-have to be reconciled. See [../todo/milestones.md](../todo/milestones.md), D3 and D4.
+have to be reconciled. See web's `spec/todo/milestones.md`, D3 and D4.
 
 So: read the site's `vite.config.ts`, `app.html` and `styles/app.css`
 before deciding the editor needs something of its own. What genuinely differs is worth a
@@ -171,7 +171,7 @@ one that did.
 Bits UI is the site's headless behavior layer. It owns the difficult, reusable interaction
 contracts -- focus management, keyboard navigation, dismissal and floating placement -- while
 the site's tokens and local classes continue to own site-only visible decisions. Which system
-writes which of those is [css/](css/).
+writes which of those is web's `spec/architecture/css/`.
 Importing a styled component kit on top would create a second design system, so project primitives
 under `apps/site/src/lib/components/` expose the small set of surfaces the site alone repeats.
 
@@ -213,7 +213,7 @@ tooltips and surrounding statistics use the same surfaces as the rest of the sit
 ## A runtime's globals decide which program checks a file
 
 Type checking runs three times, over three programs: [tsconfig.json](../../tsconfig.json) for the
-browser and anything indifferent to a runtime, [tsconfig.workers.json](../../tsconfig.workers.json)
+browser and anything indifferent to a runtime, platform's `tsconfig.workers.json`
 for the Workers and the code only they run -- `platform/libs/sdk/store`, the site's API in `apps/site/api` -- and [tsconfig.scripts.json](../../tsconfig.scripts.json) for
 the node programs under an app's `scripts/`.
 
@@ -366,11 +366,11 @@ referenced it by name.
 
 **Rust reads the map through a generated mirror.** A Rust process cannot import a TypeScript
 library, so `mise run urls` renders the composed map into
-[`platform/libs/sdk/src/lib.rs`](../../platform/libs/sdk/src/lib.rs), the `monoflake` crate; the author's
+platform's `platform/libs/sdk/src/lib.rs`, the `monoflake` crate; the author's
 own is the lib repository's `canmi` crate, rendered there the same way, which infra reads since it
 may not read the platform's. Each is committed beside its map, like the records under `data/build/`, so a checkout compiles without Node having run
 first. A mirror is never edited by hand: each package's
-[`rust.test.ts`](../../platform/libs/sdk/src/rust.test.ts) fails `verify` the moment it disagrees with its
+platform's `platform/libs/sdk/src/rust.test.ts` fails `verify` the moment it disagrees with its
 map, so the one-edit measure survives the language boundary. The
 alternative, exempting Rust from the rule, would have left half the repo carrying literals
 that the check answers for everywhere else.
@@ -406,7 +406,7 @@ free, which a written-in one could never have: the directive is one line and a v
 nine.
 
 The cost is that the site's content build runs
-[two passes](../../services/libs/compile/src/articles.ts): every view's frontmatter is
+two passes (web's `services/libs/compile/src/articles.ts`): every view's frontmatter is
 read before anything compiles, because the compiler sees one article at a time while a card
 names another. A path no article answers to fails the build rather than degrading to a
 placeholder -- unlike an embed, nothing has to be fetched first, so an unresolved path is a typo

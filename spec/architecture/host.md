@@ -1,14 +1,14 @@
 # `host`: deploying to the machine at home
 
-`infra/apps/host` is a small deployment platform for the always-on machine on the home network -- the one
-milestones D1 and D2 in [../todo/milestones.md](../todo/milestones.md) assume. An app in this
+`apps/host` is a small deployment platform for the always-on machine on the home network -- the one
+milestones D1 and D2 in web's `spec/todo/milestones.md` assume. An app in this
 repository declares that it runs there the way another declares a Worker, and a push to `main` then
 reaches it without anybody logging into the machine. Images somebody else publishes are not declared
 here; they are managed from host's panel.
 
 The machine has no inbound public address. It reaches out through a Cloudflare tunnel, and it is on
 the tailnet. Everything below is shaped by that and by there being exactly one user. Which services
-are placed on it, and how names and APIs reach them, is [services.md](services.md).
+are placed on it, and how names and APIs reach them, is platform's `spec/architecture/services.md`.
 
 ## One name inside, and a domain label outside
 
@@ -47,7 +47,7 @@ anyone's and its token opens pull requests and nothing more. It is not built yet
 label is changed in `service.toml`.
 
 `internal.ixc.one` is private and `.app` is public, and what each admits is
-[services.md](services.md), "A domain says who can reach it, not what is behind it".
+platform's `spec/architecture/services.md`, "A domain says who can reach it, not what is behind it".
 
 ## One version runs, and a failed deploy puts the last one back
 
@@ -92,7 +92,7 @@ So the direction is reversed, and trust is moved off the channel.
   deploy runs, and CI checks the workspace out around this repository so the compiler is the one
   its `rust-toolchain.toml` names.
 - When the run ends, **GitHub's webhook** tells a Worker, which checks the delivery's signature and
-  passes the run's number on -- see [services.md](services.md), "Every node is the same node".
+  passes the run's number on -- see platform's `spec/architecture/services.md`, "Every node is the same node".
   There is no polling and no step in the workflow for it; the event says exactly which run ended,
   and that it succeeded.
 - host asks GitHub about that run with a read-only token scoped to its sources' Actions, and **runs
@@ -189,7 +189,7 @@ An app states what it needs in `apps/<name>/service.toml` and ships it with its 
 program deployed apart from the file it reads, so the file carries a `version` and host refuses one
 it does not know before reading anything else, while a key it does not know is ignored -- see the
 workspace's `json.md`. What the keys are is
-[manifest/mod.rs](../../infra/libs/deploy/src/manifest/mod.rs); host reads geo's own file in its tests, so
+[manifest/mod.rs](../../libs/deploy/src/manifest/mod.rs); host reads geo's own file in its tests, so
 the reader and a real declaration cannot drift apart.
 
 An upload is written to disk whole before anything is stopped, so a transfer cut short never leaves
@@ -216,7 +216,7 @@ An updater cannot be the thing it updates: a broken update leaves nothing runnin
 it. So there are two programs, and each updates the other, never itself.
 
 - **keeper** is small and rarely changes. It deploys host by the same stop, snapshot, start and check
-  as any app -- one procedure, in `infra/libs/deploy`, that both programs call -- against host's
+  as any app -- one procedure, in `libs/deploy`, that both programs call -- against host's
   `/health`, which answers only once host reads its own database and reaches Docker. On failure it
   puts the previous host back.
 - **host** deploys everything else, keeper included.
@@ -282,7 +282,7 @@ own policy, and Caddy starts from the file host last wrote whether or not host i
 
 ### Caddy is deployed like any app, and is the one door
 
-**Caddy is `infra/apps/caddy`, built here and deployed by host, in a shape its name alone gets: the
+**Caddy is `apps/caddy`, built here and deployed by host, in a shape its name alone gets: the
 edge.** The official build with two modules, xcaddy's Cloudflare DNS provider for its certificates
 and the rate limiter host renders each service's limits into; declared, versioned, rolled back and
 shown in the panel as every app is. The shape differs from an app's sandbox in four things:
@@ -304,7 +304,7 @@ beside it, `docker compose up -d`.
 
 ### The tunnel is deployed like any app, at the address Caddy trusts
 
-**cloudflared is `infra/apps/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an
+**cloudflared is `apps/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an
 app is, but standing on `edge` at `tunnel_source` from host's configuration -- the one address
 Caddy believes `Cf-Connecting-Ip` from, so a visitor's address is only ever taken from it. Its
 routes are the dashboard's, a remotely-managed tunnel; its token is `TUNNEL_TOKEN` in its
@@ -322,7 +322,7 @@ shares one, so that is not enough on its own. It refuses any request whose `x-in
 through: the internal gateway, and a service at home with a limit to count. It answers one name,
 `api.inside`, with every scope, taken off as the tunnel's side does, and counts no limit, since what
 reaches it was counted by the gateway that sent it. It is the node's counterpart of what a Worker
-has by binding and by VPC service; see [gateway.md](gateway.md), "Inside the house, the same names
+has by binding and by VPC service; see platform's `spec/architecture/gateway.md`, "Inside the house, the same names
 answer locally".
 
 **A scope says which sides carry it**, as `sides` under `[api]`: `private`, `tunnel` and `inside`,
@@ -338,7 +338,7 @@ gateway takes a caller's address from.
 
 ### The resolver answers the gateway's names, and passes the rest on
 
-**The house's DNS is `infra/apps/resolver`, CoreDNS adopted from upstream, in a shape its name alone
+**The house's DNS is `apps/resolver`, CoreDNS adopted from upstream, in a shape its name alone
 gets**: sandboxed as an app is, and publishing 53 over UDP and TCP on the machine, the one container
 beside Caddy that publishes anything. host renders its whole configuration, as it does Caddy's, and
 nothing about it is written by hand.
@@ -431,7 +431,7 @@ remedy is one request rather than a list of commands.
 
 ## The panel is an app of its own
 
-**The panel is `infra/apps/panel`, a SvelteKit server on Node, and host's interface; host itself has
+**The panel is `apps/panel`, a SvelteKit server on Node, and host's interface; host itself has
 none.** host holds the Docker socket and the whole of `/data`, so what faces a browser is kept out
 of it: a panel broken into reaches host's API and nothing below it, and holds no token of its own to
 reach even that with -- it passes on the one the visitor signed in with. host deploys it like any
@@ -452,11 +452,11 @@ app, in the sandbox, under a reserved name, restarted and never stopped from its
   the browser.
 - It answers `/health` itself, without asking host, so it stays up to say that host does not.
 
-It is written in `infra/apps/panel/`, its components named in lowercase like every file.
+It is written in `apps/panel/`, its components named in lowercase like every file.
 
 **It is styled as the site is, in the site's three layers, and colored as nothing else here is.**
 Tailwind in the markup for where a thing sits, StyleX for what it looks like, a `<style>` block
-for what carries no class -- [css/layers.md](css/layers.md) decides which is which, and the build
+for what carries no class -- web's `spec/architecture/css/layers.md` decides which is which, and the build
 and development arrangements there are copied rather than re-derived. Its colors are Nord's, one
 theme and dark, with no light twin: the sixteen are declared under their own names in `panel.css`,
 what the panel means by each is declared beside them, and a surface in `src/lib/style/` reads the
@@ -602,7 +602,7 @@ container the paths are Linux's own, so host binds what it would bind on the mac
    host inside it as the compose file does, with a token of its own; Caddy's absence is logged and
    ignored.
 4. Deploy through its API as `mise run host deploy` would, and point the panel at it:
-   `HOST_API=http://localhost:11011 pnpm run dev` in `infra/apps/panel`. Without `HOST_API` a
+   `HOST_API=http://localhost:11011 pnpm run dev` in `apps/panel`. Without `HOST_API` a
    development panel asks the running panel on the machine, signed in as the token mise decrypts.
 
 A copy of the machine's three databases, read over SSH, gives the panel the real apps and history to
@@ -610,4 +610,4 @@ draw; `docker cp` cannot see into the btrfs mount, so they go in through `docker
 
 ## Open
 
-What is still undecided about placing services here is listed in [services.md](services.md).
+What is still undecided about placing services here is listed in platform's `spec/architecture/services.md`.

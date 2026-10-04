@@ -1,9 +1,9 @@
-# Everything Behind
+# infra
 
-Personal interconnected monorepo.  
-Built from scratch. See `mise.toml` for project tasks.
+The infrastructure of the author's system: `host`, which runs every app on a node, `keeper`, which
+replaces host, their panel, the node's meter, and the doors a request comes in by.
 
-Mostly built for myself, but feel free to browse the code for reference.
+See `mise.toml` for the tasks, and [spec/repository.md](spec/repository.md) for how it is laid out.
 
 ## License
 

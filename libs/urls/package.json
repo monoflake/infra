@@ -1,0 +1,32 @@
+{
+	"name": "@monoflake/urls",
+	"version": "0.0.0",
+	"description": "Infra's own addresses: the panel, keeper and host, which bootstrap everything else",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/monoflake/infra.git",
+		"directory": "libs/urls"
+	},
+	"type": "module",
+	"files": [
+		"dist"
+	],
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"publishConfig": {
+		"exports": {
+			".": {
+				"types": "./dist/src/index.d.ts",
+				"default": "./dist/src/index.js"
+			}
+		}
+	},
+	"scripts": {
+		"build": "tsdown"
+	},
+	"dependencies": {
+		"@canmi/me": "^2026.1004.1"
+	}
+}

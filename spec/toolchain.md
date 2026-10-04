@@ -90,7 +90,7 @@ One checkout runs one set, on the pinned numbers. The slot arithmetic that shift
 for a second checkout of this repository is gone with the arrangement it served, and one fixed
 shift came back for a different one: the sandbox binds every number plus 100, from
 `LATTICE_PORT_OFFSET`, which nothing else sets -- see
-[architecture/modes.md](architecture/modes.md); what it
+web's `spec/architecture/modes.md`; what it
 protected still holds, and more simply: `local` is the one process that writes `data/`, and a
 second copy of it collides on `LOCAL_PORT`, which is the mutex doing its job.
 
@@ -140,7 +140,7 @@ none, which is how the two were told apart.
 
 Reclaimed rather than prevented, because a leaked process can only be told from a live one once
 its parent is gone -- which is after the run that made it. So
-[`reap-workerd.ts`](../apps/site/scripts/reap-workerd.ts) runs at the start of the next build and
+web's `apps/site/scripts/reap-workerd.ts` runs at the start of the next build and
 of the next test run, and on its own for the same job by hand.
 
 Two are spared. One whose parent is alive belongs to whoever started it, which is every dev server
@@ -153,14 +153,14 @@ may still be reading, and closing it is not a build's business.
 **`mise run reach [name]` answers on `http://localhost:26520` for `<name>.internal.ixc.one`**, host's
 panel when no name is given. macOS asks before a program reaches the local network, and a browser
 an agent drives, like node from mise, is refused; the system's own `ssh` and `curl` never are.
-So [`reach.ts`](../infra/apps/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
+So [`reach.ts`](../apps/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
 port and speaks to that alone, sending every request as the name would arrive: TLS with the name
 as SNI and as `Host`, so Caddy routes it. Caddy's guard sees the node's own address, which is a
 LAN one; a tunnel to the node's loopback is refused by the same guard, which is why the far end
 is the LAN address.
 
 Plain HTTP on this side, because localhost is a secure context: the session cookie's `Secure` is
-kept and still sent. The port is `REACH_PORT` in `infra/libs/urls`, beside the pinned ones and outside
+kept and still sent. The port is `REACH_PORT` in `libs/urls`, beside the pinned ones and outside
 their map, since what answers there is not an app.
 
 ## The base session
@@ -179,7 +179,7 @@ them to be started by hand outside the session, where nothing could see or stop 
 everything, on the numbers "Dev ports are pinned" above fixes, so a second checkout starting these
 would collide rather than get a set of its own. The sandbox is the one exception, and runs the
 same session under its own name on the shifted set -- see
-[architecture/modes.md](architecture/modes.md). That collision is the mutex, which is the same
+web's `spec/architecture/modes.md`. That collision is the mutex, which is the same
 arrangement the ports themselves rely on.
 
 tmux is a machine tool rather than a mise one, for the reason the workspace's `toolchain.md`
@@ -225,7 +225,7 @@ anything about the code. A dependency update crossing that major has broken the 
 pin, and the repair is to put the 6 back rather than to chase the error into `svelte-check`.
 
 The root manifest carries 7 in both slots and is right to: nothing there runs `svelte-check`.
-Every other package that does -- `services/apps/cms`, `infra/apps/panel`, `apps/status`, `services/libs/prose`,
+Every other package that does -- `services/apps/cms`, `apps/panel`, `apps/status`, `services/libs/prose`,
 `services/libs/social` -- holds `typescript` at 6 for the same reason, reaching 7 through the root, so
 `outdated` listing 7 for each of them is this floor and not an upgrade waiting. `versions.toml`
 allows the pair, so the report says so rather than warning.
@@ -250,7 +250,7 @@ mapping, and these are the rules it keeps:
   `cargo metadata` rather than listed, and clippy and the tests run over those alone. A test that
   reads another crate's file through `include_str!` depends on it without its manifest saying so;
   those paths are read out of the source, so changing geo's `service.toml` tests host and
-  `infra/libs/deploy` too. `Cargo.lock`, the workspace manifest and the toolchain file reach every crate.
+  `libs/deploy` too. `Cargo.lock`, the workspace manifest and the toolchain file reach every crate.
 - **A TypeScript, Svelte or style change reaches its package and every package that imports it**,
   read from the `workspace:` dependencies. Any of them runs the three whole-program gates -- the
   type check, the linter, the test suite -- and a package with gates of its own runs them only when
