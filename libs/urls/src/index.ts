@@ -3,8 +3,6 @@
  * named below it. See web's spec/architecture/layers.md, "Addresses are split by who owns the
  * name".
  */
-import { PORT_OFFSET } from '@canmi/me/urls';
-
 export const INFRA = {
 	// The panel, host's interface, an app of its own; see spec/architecture/host.md.
 	panel: 'https://infra.internal.ixc.one',
@@ -13,7 +11,7 @@ export const INFRA = {
 	host: 'http://host:11011',
 } as const;
 
-/** The port the panel's development server answers on, before the sandbox shifts it. */
+/** The port the panel's development server answers on. */
 export const PANEL_PORT = 26519;
 
 /**
@@ -21,4 +19,4 @@ export const PANEL_PORT = 26519;
  * LAN reaches. Not an app, so it is kept out of the pinned ports. See spec/repository.md, "Reaching
  * the LAN from a browser that cannot".
  */
-export const REACH_PORT: number = 26520 + PORT_OFFSET;
+export const REACH_PORT = 26520;

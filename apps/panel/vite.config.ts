@@ -1,7 +1,6 @@
 import adapter from '@sveltejs/adapter-node';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { fileURLToPath } from 'node:url';
-import { PORT_OFFSET } from '@canmi/me/urls';
 import { PANEL_PORT } from '@monoflake/urls';
 import stylex from '@stylexjs/unplugin/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
@@ -36,7 +35,7 @@ export default defineConfig({
 		},
 	],
 	server: {
-		port: PANEL_PORT + PORT_OFFSET,
+		port: PANEL_PORT,
 		strictPort: true,
 	},
 });

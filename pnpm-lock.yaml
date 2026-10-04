@@ -264,11 +264,7 @@ importers:
         specifier: ^8.3.2
         version: 8.3.2(@types/node@26.6.4)(jiti@2.7.0)
 
-  libs/urls:
-    dependencies:
-      '@canmi/me':
-        specifier: ^2026.1004.1
-        version: 2026.1004.1
+  libs/urls: {}
 
 packages:
 
