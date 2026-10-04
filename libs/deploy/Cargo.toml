@@ -1,6 +1,8 @@
 [package]
 name = "deploy"
 version = "0.0.0"
+description = "What host and keeper share."
+keywords = ["deploy", "docker", "btrfs"]
 edition.workspace = true
 license.workspace = true
 

@@ -1,6 +1,13 @@
 {
 	"name": "@monoflake/host",
 	"private": true,
+	"description": "Deploys every app on the machine at home.",
+	"keywords": [
+		"deploy",
+		"docker",
+		"paas",
+		"self-hosted"
+	],
 	"type": "module",
 	"dependencies": {
 		"@monoflake/urls": "workspace:*"

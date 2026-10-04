@@ -1,6 +1,8 @@
 [package]
 name = "host"
 version = "0.0.0"
+description = "Deploys every app on the machine at home."
+keywords = ["deploy", "docker", "self-hosted", "paas"]
 edition.workspace = true
 license.workspace = true
 

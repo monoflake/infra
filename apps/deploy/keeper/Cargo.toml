@@ -1,6 +1,8 @@
 [package]
 name = "keeper"
 version = "0.0.0"
+description = "The one that deploys host."
+keywords = ["deploy", "docker", "self-hosted"]
 edition.workspace = true
 license.workspace = true
 

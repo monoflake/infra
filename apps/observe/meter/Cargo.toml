@@ -1,6 +1,8 @@
 [package]
 name = "meter"
 version = "0.0.0"
+description = "Samples the machine every second."
+keywords = ["metrics", "monitoring", "system"]
 edition.workspace = true
 license.workspace = true
 

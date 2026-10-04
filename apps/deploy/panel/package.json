@@ -1,6 +1,12 @@
 {
 	"name": "@monoflake/panel",
 	"private": true,
+	"description": "host's web interface.",
+	"keywords": [
+		"dashboard",
+		"self-hosted",
+		"sveltekit"
+	],
 	"type": "module",
 	"imports": {
 		"#lib": "./src/lib/index.js",

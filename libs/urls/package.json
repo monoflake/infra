@@ -1,7 +1,11 @@
 {
 	"name": "@monoflake/urls",
 	"version": "0.0.0",
-	"description": "Infra's own addresses: the panel, keeper and host, which bootstrap everything else",
+	"description": "Infra's own addresses.",
+	"keywords": [
+		"monoflake",
+		"urls"
+	],
 	"license": "MIT",
 	"repository": {
 		"type": "git",
