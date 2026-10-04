@@ -333,8 +333,7 @@ mod tests {
 
 	#[test]
 	fn keeps_what_runs_what_a_rollback_needs_and_keepers_own() {
-		let manifest =
-			Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
+		let manifest = Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
 		let geo = Deployed {
 			manifest: manifest.clone(),
 			image: "sha256:now".into(),

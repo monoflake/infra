@@ -245,8 +245,7 @@ mod tests {
 
 	fn driver() -> deploy::Version {
 		let manifest =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/objects.toml"))
-				.unwrap();
+			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/objects.toml")).unwrap();
 		deploy::Version { manifest, image: "sha256:driver".into() }
 	}
 
@@ -333,8 +332,7 @@ mod tests {
 
 	fn postgres() -> deploy::Version {
 		let manifest =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/postgres.toml"))
-				.unwrap();
+			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/postgres.toml")).unwrap();
 		deploy::Version { manifest, image: "sha256:postgres".into() }
 	}
 

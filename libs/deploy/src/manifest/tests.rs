@@ -122,8 +122,10 @@ fn every_declaration_in_the_repository_is_one_this_reader_takes() {
 	// This repository's own apps, and the platform's as fixtures/ keeps a copy of them: the
 	// platform's repository is another one, so its declarations are read from the copy.
 	let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-	let own = std::fs::read_dir(root.join("apps")).unwrap().map(|e| e.unwrap().path().join("service.toml"));
-	let fixtures = std::fs::read_dir(root.join("libs/deploy/fixtures")).unwrap().map(|e| e.unwrap().path());
+	let own =
+		std::fs::read_dir(root.join("apps")).unwrap().map(|e| e.unwrap().path().join("service.toml"));
+	let fixtures =
+		std::fs::read_dir(root.join("libs/deploy/fixtures")).unwrap().map(|e| e.unwrap().path());
 	let mut read = 0;
 	for path in own.chain(fixtures) {
 		let Ok(text) = std::fs::read_to_string(&path) else { continue };
@@ -191,8 +193,7 @@ fn names_its_sides_from_three_and_never_leaves_out_inside() {
 
 #[test]
 fn a_home_stays_on_the_apps_own_site() {
-	let gemini =
-		Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
+	let gemini = Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
 	assert_eq!(gemini.check("gemini", "home"), Ok(()));
 	for home in ["/", "admin", "//evil.example"] {
 		let mut elsewhere = gemini.clone();
@@ -212,8 +213,7 @@ fn a_node_refuses_an_api_prefix() {
 
 #[test]
 fn a_label_maps_an_apps_name_for_what_reaches_it_from_outside() {
-	let gemini =
-		Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
+	let gemini = Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
 	let interface = gemini.interface.as_ref().unwrap();
 	// No `domain` set: the label is the app's own name.
 	assert_eq!(interface.label("gemini"), "gemini");
@@ -282,8 +282,7 @@ fn every_sidecar_name_is_reserved_and_the_driver_is_named_like_any_app() {
 	assert!(check_name("objects-geo").is_ok());
 	// A driver is what its declaration offers and the node grants, not what it is called.
 	assert!(check_name("objects").is_ok());
-	let driver =
-		Manifest::parse(include_str!("../../fixtures/objects.toml")).unwrap();
+	let driver = Manifest::parse(include_str!("../../fixtures/objects.toml")).unwrap();
 	assert_eq!(driver.driver.as_ref().map(|driver| driver.provides.as_str()), Some("objects"));
 	assert_eq!(driver.check("objects", "home"), Ok(()));
 }
@@ -315,8 +314,7 @@ fn databases_are_declared_each_with_an_optional_ceiling() {
 fn every_database_sidecar_name_is_reserved_and_only_a_driver_keeps_its_own_port() {
 	assert_eq!(check_name("geo-postgres"), Err(Invalid::Reserved("geo-postgres".into())));
 	assert!(check_name("postgres-geo").is_ok());
-	let driver =
-		Manifest::parse(include_str!("../../fixtures/postgres.toml")).unwrap();
+	let driver = Manifest::parse(include_str!("../../fixtures/postgres.toml")).unwrap();
 	assert_eq!(driver.check("postgres", "home"), Ok(()));
 	// Only a driver keeps a port outside the services' range; an app on 5432 is still refused.
 	let mut geo = Manifest::parse(GEO).unwrap();
@@ -326,8 +324,7 @@ fn every_database_sidecar_name_is_reserved_and_only_a_driver_keeps_its_own_port(
 
 #[test]
 fn lan_defaults_to_on_and_can_be_turned_off() {
-	let gemini =
-		Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
+	let gemini = Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
 	assert!(gemini.interface.as_ref().unwrap().lan);
 	let mut off = gemini;
 	off.interface.as_mut().unwrap().lan = false;

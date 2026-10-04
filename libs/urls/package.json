@@ -8,10 +8,10 @@
 		"url": "git+https://github.com/monoflake/infra.git",
 		"directory": "libs/urls"
 	},
-	"type": "module",
 	"files": [
 		"dist"
 	],
+	"type": "module",
 	"exports": {
 		".": "./src/index.ts"
 	},

@@ -426,8 +426,7 @@ mod tests {
 
 	fn geo() -> Deployed {
 		Deployed {
-			manifest: Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml"))
-				.unwrap(),
+			manifest: Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap(),
 			image: "sha256:a".into(),
 			previous: None,
 			deployed_at: String::new(),

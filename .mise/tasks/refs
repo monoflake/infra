@@ -92,8 +92,9 @@ URL_HOMES = ("libs/urls/",)
 # at (spec/toolchain.md). JSON-LD's `@context` is a namespace identifier like an xmlns:
 # changing it changes what the document means, not where anything points. `registry+https://`
 # is cargo's own source-id syntax, quoted in test fixtures in cargo's spelling -- an
-# identifier again, and not this software's to respell.
-URL_EXEMPT = ('"$schema"', "'@context'", '"@context"', "registry+https://")
+# identifier again, and not this software's to respell. `git+https://` is a package's
+# `repository` as npm spells it: metadata a registry shows, never an address this code calls.
+URL_EXEMPT = ('"$schema"', "'@context'", '"@context"', "registry+https://", "git+https://")
 # Names RFC 2606 reserves so they can never resolve. A URL on one of these is a placeholder --
 # for an API demanding an absolute URL, or a value a test needs rejected -- and never an
 # endpoint. Exempting by rule rather than case by case is what keeps this from collecting

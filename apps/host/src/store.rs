@@ -714,8 +714,7 @@ mod history {
 	fn a_hold_is_kept_until_released_and_survives_a_new_version() {
 		let directory = tempfile::tempdir().unwrap();
 		let store = Store::open(directory.path()).unwrap();
-		let manifest =
-			Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
+		let manifest = Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
 		let app = |image: &str| Deployed {
 			manifest: manifest.clone(),
 			image: image.into(),

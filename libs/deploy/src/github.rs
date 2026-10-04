@@ -306,7 +306,7 @@ mod tests {
 
 	fn run() -> Run {
 		Run {
-			repository: Repository { full_name: "owner/lattice".into() },
+			repository: Repository { full_name: "owner/infra".into() },
 			path: WORKFLOW.into(),
 			head_branch: Some("main".into()),
 			event: "push".into(),
@@ -318,14 +318,14 @@ mod tests {
 
 	#[test]
 	fn a_successful_deploy_run_on_main_is_one_to_deploy() {
-		assert!(check(1, &run(), "owner/lattice").is_ok());
-		assert!(check(1, &Run { event: "schedule".into(), ..run() }, "owner/lattice").is_ok());
+		assert!(check(1, &run(), "owner/infra").is_ok());
+		assert!(check(1, &Run { event: "schedule".into(), ..run() }, "owner/infra").is_ok());
 	}
 
 	#[test]
 	fn anything_else_is_refused() {
-		let refused = |record: Run| check(1, &record, "owner/lattice").is_err();
-		assert!(refused(Run { repository: Repository { full_name: "else/lattice".into() }, ..run() }));
+		let refused = |record: Run| check(1, &record, "owner/infra").is_err();
+		assert!(refused(Run { repository: Repository { full_name: "else/infra".into() }, ..run() }));
 		assert!(refused(Run { path: ".github/workflows/other.yml".into(), ..run() }));
 		assert!(refused(Run { head_branch: Some("feature".into()), ..run() }));
 		assert!(refused(Run { head_branch: None, ..run() }));
@@ -337,9 +337,9 @@ mod tests {
 	#[test]
 	fn the_sources_are_the_owner_and_name_pairs_the_node_lists() {
 		assert_eq!(sources(" canmi21/web\tmonoflake/infra \n"), ["canmi21/web", "monoflake/infra"]);
-		assert!(sources("lattice a/b/c").is_empty());
-		let one = GitHub::new(String::new(), sources("canmi21/lattice"));
-		assert_eq!(one.only_source(), Some("canmi21/lattice"));
+		assert!(sources("infra a/b/c").is_empty());
+		let one = GitHub::new(String::new(), sources("monoflake/infra"));
+		assert_eq!(one.only_source(), Some("monoflake/infra"));
 		let two = GitHub::new(String::new(), sources("a/b c/d"));
 		assert_eq!(two.only_source(), None);
 	}
