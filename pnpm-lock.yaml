@@ -198,11 +198,11 @@ importers:
   apps/panel:
     devDependencies:
       '@canmi/kit':
-        specifier: ^2026.1004.1
-        version: 2026.1004.2(@stylexjs/stylex@0.19.1)(svelte@5.57.1)
+        specifier: ^2026.1004.4
+        version: 2026.1004.4(@stylexjs/stylex@0.19.1)(svelte@5.57.1)
       '@canmi/me':
-        specifier: ^2026.1004.1
-        version: 2026.1004.1
+        specifier: ^2026.1004.4
+        version: 2026.1004.4
       '@canmi/response':
         specifier: ^2.0.0
         version: 2.0.0
@@ -357,8 +357,8 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@canmi/kit@2026.1004.2':
-    resolution: {integrity: sha512-LaQi8W/hoDWHYVGU4O3GUwNM+yzQxXERbSu4VchaDTEmZKuJE23FTACcQPBDDvzTFUFmwDTCYk7Lkrhj/xeWGw==}
+  '@canmi/kit@2026.1004.4':
+    resolution: {integrity: sha512-xNgPLOaVhjSUAgfeBLjCZPvmYgo13aP5VtKANAQLaBPwEFQnxzaqi/oty00X0matmLJk87/E5/A3A4M+4LTKOw==}
     peerDependencies:
       '@stylexjs/stylex': ^0.19.1
       svelte: ^5.57.1
@@ -368,8 +368,8 @@ packages:
       svelte:
         optional: true
 
-  '@canmi/me@2026.1004.1':
-    resolution: {integrity: sha512-LGgEclVsS6YEuS2E6m+2unXm/6C77uah6UFRR7TdFW87V/fMefHyNwQe8nFUSoCW6YSu900Zws5Csp4X7tD2Cg==}
+  '@canmi/me@2026.1004.4':
+    resolution: {integrity: sha512-INyLjju+m+RNd6Kb7KtuHvckbO4SW3cmSc23eqBmvKrzEmEwrPgMRqpGun8eN6vuaQZEnbLYNySpxRRYgJ4AlA==}
 
   '@canmi/response@2.0.0':
     resolution: {integrity: sha512-fQh5D0dAcdvccqWLcGQKzpGNa1TbyhZ+4B5kq5/LWPOnacdq5OY8uJoCn7zgdM0MNZMsZiDVsOXSu9fIQEdC4w==}
@@ -1968,7 +1968,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@canmi/kit@2026.1004.2(@stylexjs/stylex@0.19.1)(svelte@5.57.1)':
+  '@canmi/kit@2026.1004.4(@stylexjs/stylex@0.19.1)(svelte@5.57.1)':
     dependencies:
       motion: 14.0.0
       thumbhash: 0.1.1
@@ -1979,7 +1979,7 @@ snapshots:
       - react
       - react-dom
 
-  '@canmi/me@2026.1004.1': {}
+  '@canmi/me@2026.1004.4': {}
 
   '@canmi/response@2.0.0': {}
 
