@@ -10,9 +10,23 @@ system is cut into this layer, the platform's and the services', is web's
 
 ## `apps/` is deployed, `libs/` is imported
 
-Every app has a directory under `apps/` with its `service.toml` and, for one host runs, its
+Every app has a directory under `apps/<group>/` with its `service.toml` and, for one host runs, its
 `Dockerfile`; every library one under `libs/`. A crate is listed in `Cargo.toml` by hand and a
 package found by `pnpm-workspace.yaml`'s globs, so a TypeScript-only directory never breaks Cargo.
+
+**The apps are grouped by what each does**, as the platform's are, so the two repositories read
+the same way:
+
+| Group     | Apps                    | What they are                                     |
+| --------- | ----------------------- | ------------------------------------------------- |
+| `deploy`  | host, keeper, panel     | what deploys every app, and the interface over it |
+| `network` | caddy, tunnel, resolver | the doors a request comes in by                   |
+| `observe` | meter                   | the node watched from inside                      |
+
+**A group is a directory and nothing more.** An app's name is still its directory's own: host
+chooses a container's shape by the app's name and keeps its data under `/data/apps/<name>`, and
+an image and a container are named for the app, so moving an app between groups changes nothing on
+the node. The tools find an app by `apps/*/<name>`.
 
 ## The other repositories are named, never linked
 
@@ -32,7 +46,7 @@ change that makes it accept it.
 **`mise run reach [name]` answers on `http://localhost:26520` for `<name>.internal.ixc.one`**, host's
 panel when no name is given. macOS asks before a program reaches the local network, and a browser
 an agent drives, like node from mise, is refused; the system's own `ssh` and `curl` never are.
-So [`reach.ts`](../apps/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
+So [`reach.ts`](../apps/deploy/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
 port and speaks to that alone, sending every request as the name would arrive: TLS with the name
 as SNI and as `Host`, so Caddy routes it. Caddy's guard sees the node's own address, which is a
 LAN one; a tunnel to the node's loopback is refused by the same guard, which is why the far end

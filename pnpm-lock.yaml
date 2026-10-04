@@ -185,17 +185,17 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0))
 
-  apps/host:
+  apps/deploy/host:
     dependencies:
       '@monoflake/urls':
         specifier: workspace:*
-        version: link:../../libs/urls
+        version: link:../../../libs/urls
     devDependencies:
       '@types/node':
         specifier: ^26.6.4
         version: 26.6.4
 
-  apps/panel:
+  apps/deploy/panel:
     devDependencies:
       '@canmi/kit':
         specifier: ^2026.1004.4
@@ -211,7 +211,7 @@ importers:
         version: 1.51.0(svelte@5.57.1)
       '@monoflake/urls':
         specifier: workspace:*
-        version: link:../../libs/urls
+        version: link:../../../libs/urls
       '@stylexjs/stylex':
         specifier: ^0.19.1
         version: 0.19.1

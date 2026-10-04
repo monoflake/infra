@@ -426,7 +426,7 @@ mod tests {
 
 	fn geo() -> Deployed {
 		Deployed {
-			manifest: Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap(),
+			manifest: Manifest::parse(include_str!("../../../../libs/deploy/fixtures/geo.toml")).unwrap(),
 			image: "sha256:a".into(),
 			previous: None,
 			deployed_at: String::new(),
@@ -443,7 +443,7 @@ mod tests {
 	}
 
 	fn quota() -> Deployed {
-		deployed(include_str!("../../../libs/deploy/fixtures/quota.toml"))
+		deployed(include_str!("../../../../libs/deploy/fixtures/quota.toml"))
 	}
 
 	/// The node's grants as a test node has them: the gateway may claim its hostnames.
@@ -452,7 +452,7 @@ mod tests {
 	}
 
 	fn gateway() -> Deployed {
-		deployed(include_str!("../../../libs/deploy/fixtures/gateway.toml"))
+		deployed(include_str!("../../../../libs/deploy/fixtures/gateway.toml"))
 	}
 
 	#[test]
@@ -628,7 +628,7 @@ mod tests {
 
 	#[test]
 	fn an_apps_declared_home_redirects_its_root() {
-		let text = include_str!("../../../libs/deploy/fixtures/gemini.toml");
+		let text = include_str!("../../../../libs/deploy/fixtures/gemini.toml");
 		let gemini = Deployed {
 			manifest: Manifest::parse(text).unwrap(),
 			image: "sha256:g".into(),

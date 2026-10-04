@@ -237,7 +237,7 @@ mod tests {
 	use deploy::sidecar::{Check, Driver};
 
 	fn photos() -> deploy::Manifest {
-		let geo = include_str!("../../../libs/deploy/fixtures/geo.toml");
+		let geo = include_str!("../../../../libs/deploy/fixtures/geo.toml");
 		let text = geo.replace("name = \"geo\"", "name = \"photos\"");
 		deploy::Manifest::parse(&format!("{text}\n[objects]\nbuckets = [\"originals\", \"thumbs\"]\n"))
 			.unwrap()
@@ -245,7 +245,8 @@ mod tests {
 
 	fn driver() -> deploy::Version {
 		let manifest =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/objects.toml")).unwrap();
+			deploy::Manifest::parse(include_str!("../../../../libs/deploy/fixtures/objects.toml"))
+				.unwrap();
 		deploy::Version { manifest, image: "sha256:driver".into() }
 	}
 
@@ -268,7 +269,7 @@ mod tests {
 			]
 		);
 		let geo =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
+			deploy::Manifest::parse(include_str!("../../../../libs/deploy/fixtures/geo.toml")).unwrap();
 		assert!(super::binding(&geo, &driver.manifest).is_empty());
 		// What the app's own files said under a bound name gives way; the rest stays.
 		let mut env = vec!["S3_REGION=mars".into(), "S3_REGIONAL=kept".into(), "LEVEL=debug".into()];
@@ -301,7 +302,7 @@ mod tests {
 			]
 		);
 		let geo =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/geo.toml")).unwrap();
+			deploy::Manifest::parse(include_str!("../../../../libs/deploy/fixtures/geo.toml")).unwrap();
 		assert_eq!(super::sidecar_of(root, &geo, &driver, &credentials()), None);
 
 		// What Docker is asked for: the app's network and no other, one bind mount, sandboxed.
@@ -325,14 +326,15 @@ mod tests {
 	}
 
 	fn umami(blocks: &str) -> deploy::Manifest {
-		let geo = include_str!("../../../libs/deploy/fixtures/geo.toml");
+		let geo = include_str!("../../../../libs/deploy/fixtures/geo.toml");
 		let text = geo.replace("name = \"geo\"", "name = \"umami\"");
 		deploy::Manifest::parse(&format!("{text}\n{blocks}\n")).unwrap()
 	}
 
 	fn postgres() -> deploy::Version {
 		let manifest =
-			deploy::Manifest::parse(include_str!("../../../libs/deploy/fixtures/postgres.toml")).unwrap();
+			deploy::Manifest::parse(include_str!("../../../../libs/deploy/fixtures/postgres.toml"))
+				.unwrap();
 		deploy::Version { manifest, image: "sha256:postgres".into() }
 	}
 

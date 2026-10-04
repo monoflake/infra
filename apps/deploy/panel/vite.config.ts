@@ -9,7 +9,7 @@ import { defineConfig } from 'vite';
 
 // The workspace root, matching the site and the editor: StyleX hashes a class from the file's path
 // relative to this.
-const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 export default defineConfig({
 	plugins: [
@@ -27,7 +27,7 @@ export default defineConfig({
 			// build order is the opposite of what StyleX documents".
 			...stylex({
 				useCSSLayers: true,
-				aliases: { '#lib/*': ['/ROOT/apps/panel/src/lib/*'] },
+				aliases: { '#lib/*': ['/ROOT/apps/deploy/panel/src/lib/*'] },
 				unstable_moduleResolution: { type: 'commonJS', rootDir: ROOT },
 				lightningcssOptions: { minify: true },
 			}),

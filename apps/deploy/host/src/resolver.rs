@@ -86,7 +86,7 @@ mod tests {
 
 	/// What the gateway's own declaration claims, as a node granting it `hosts` reads it.
 	fn edge() -> Edge {
-		let text = include_str!("../../../libs/deploy/fixtures/gateway.toml");
+		let text = include_str!("../../../../libs/deploy/fixtures/gateway.toml");
 		deploy::Manifest::parse(text).unwrap().edge.unwrap()
 	}
 

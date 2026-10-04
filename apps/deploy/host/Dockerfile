@@ -2,7 +2,7 @@
 # check=skip=InvalidDefaultArgInFrom
 # Built from the repository root by `mise run host`. RUST_VERSION has no default on purpose, which
 # is the check skipped above: the task reads it from the workspace's rust-toolchain.toml. The panel
-# is an app of its own, apps/panel.
+# is an app of its own, apps/deploy/panel.
 ARG RUST_VERSION
 
 # Static, against musl, so the image needs nothing but the binary. The target follows the platform

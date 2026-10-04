@@ -126,7 +126,7 @@ mod tests {
 		}
 	}
 
-	const GEO: &str = include_str!("../../../libs/deploy/fixtures/geo.toml");
+	const GEO: &str = include_str!("../../../../libs/deploy/fixtures/geo.toml");
 
 	#[test]
 	fn a_service_with_an_api_is_reached_through_its_scope() {

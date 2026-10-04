@@ -200,7 +200,8 @@ fn a_home_stays_on_the_apps_own_site() {
 		elsewhere.interface.as_mut().unwrap().home = Some(home.into());
 		assert_eq!(elsewhere.check("gemini", "home"), Err(Invalid::Home), "{home}");
 	}
-	let tunnel = Manifest::parse(include_str!("../../../../apps/tunnel/service.toml")).unwrap();
+	let tunnel =
+		Manifest::parse(include_str!("../../../../apps/network/tunnel/service.toml")).unwrap();
 	assert_eq!(tunnel.check_own("tunnel", "home"), Ok(()));
 }
 

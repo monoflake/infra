@@ -77,7 +77,7 @@ function route(what: What, app: string | undefined, path: string | undefined): s
 /**
  * Through curl rather than fetch, same as `host.ts`: macOS refuses node from mise the LAN, and
  * curl, being the system's own, is never asked. The token goes in on stdin so it never shows in
- * `ps`. See apps/host/scripts/host.ts.
+ * `ps`. See apps/deploy/host/scripts/host.ts.
  */
 export function fetchEnvelope(path: string, token: string): Envelope<unknown> {
 	const sent = spawnSync(

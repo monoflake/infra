@@ -18,8 +18,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 
 FROM node:${NODE_VERSION}-slim
 WORKDIR /panel
-COPY --from=build /src/apps/panel/package.json ./
-COPY --from=build /src/apps/panel/build ./build
+COPY --from=build /src/apps/deploy/panel/package.json ./
+COPY --from=build /src/apps/deploy/panel/build ./build
 # The image's own `node` user, by number, so host runs it as that and nothing more.
 USER 1000:1000
 # An app's image is uploaded through here, hundreds of megabytes; the adapter's own cap is 512 KB.

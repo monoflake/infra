@@ -1,6 +1,6 @@
 # `host`: deploying to the machine at home
 
-`apps/host` is a small deployment platform for the always-on machine on the home network -- the one
+`apps/deploy/host` is a small deployment platform for the always-on machine on the home network -- the one
 milestones D1 and D2 in web's `spec/todo/milestones.md` assume. An app in this
 repository or in the platform's declares that it runs there, and a push to that repository's `main`
 then reaches it without anybody logging into the machine. Images somebody else publishes are not declared
@@ -290,7 +290,7 @@ own policy, and Caddy starts from the file host last wrote whether or not host i
 
 ### Caddy is deployed like any app, and is the one door
 
-**Caddy is `apps/caddy`, built here and deployed by host, in a shape its name alone gets: the
+**Caddy is `apps/network/caddy`, built here and deployed by host, in a shape its name alone gets: the
 edge.** The official build with two modules, xcaddy's Cloudflare DNS provider for its certificates
 and the rate limiter host renders each service's limits into; declared, versioned, rolled back and
 shown in the panel as every app is. The shape differs from an app's sandbox in four things:
@@ -312,7 +312,7 @@ beside it, `docker compose up -d`.
 
 ### The tunnel is deployed like any app, at the address Caddy trusts
 
-**cloudflared is `apps/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an
+**cloudflared is `apps/network/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an
 app is, but standing on `edge` at `tunnel_source` from host's configuration -- the one address
 Caddy believes `Cf-Connecting-Ip` from, so a visitor's address is only ever taken from it. Its
 routes are the dashboard's, a remotely-managed tunnel; its token is `TUNNEL_TOKEN` in its
@@ -346,7 +346,7 @@ gateway takes a caller's address from.
 
 ### The resolver answers the gateway's names, and passes the rest on
 
-**The house's DNS is `apps/resolver`, CoreDNS adopted from upstream, in a shape its name alone
+**The house's DNS is `apps/network/resolver`, CoreDNS adopted from upstream, in a shape its name alone
 gets**: sandboxed as an app is, and publishing 53 over UDP and TCP on the machine, the one container
 beside Caddy that publishes anything. host renders its whole configuration, as it does Caddy's, and
 nothing about it is written by hand.
@@ -439,7 +439,7 @@ remedy is one request rather than a list of commands.
 
 ## The panel is an app of its own
 
-**The panel is `apps/panel`, a SvelteKit server on Node, and host's interface; host itself has
+**The panel is `apps/deploy/panel`, a SvelteKit server on Node, and host's interface; host itself has
 none.** host holds the Docker socket and the whole of `/data`, so what faces a browser is kept out
 of it: a panel broken into reaches host's API and nothing below it, and holds no token of its own to
 reach even that with -- it passes on the one the visitor signed in with. host deploys it like any
@@ -460,7 +460,7 @@ app, in the sandbox, under a reserved name, restarted and never stopped from its
   the browser.
 - It answers `/health` itself, without asking host, so it stays up to say that host does not.
 
-It is written in `apps/panel/`, its components named in lowercase like every file.
+It is written in `apps/deploy/panel/`, its components named in lowercase like every file.
 
 **It is styled as the site is, in the site's three layers, and colored as nothing else here is.**
 Tailwind in the markup for where a thing sits, StyleX for what it looks like, a `<style>` block
@@ -610,7 +610,7 @@ container the paths are Linux's own, so host binds what it would bind on the mac
    host inside it as the compose file does, with a token of its own; Caddy's absence is logged and
    ignored.
 4. Deploy through its API as `mise run host deploy` would, and point the panel at it:
-   `HOST_API=http://localhost:11011 pnpm run dev` in `apps/panel`. Without `HOST_API` a
+   `HOST_API=http://localhost:11011 pnpm run dev` in `apps/deploy/panel`. Without `HOST_API` a
    development panel asks the running panel on the machine, signed in as the token mise decrypts.
 
 A copy of the machine's three databases, read over SSH, gives the panel the real apps and history to

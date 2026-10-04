@@ -5,9 +5,9 @@ resolver = "3"
 # Cargo.toml, so a glob over `apps/*` would break every cargo command the moment a
 # TypeScript-only directory appeared there.
 members = [
-	"apps/host",
-	"apps/keeper",
-	"apps/meter",
+	"apps/deploy/host",
+	"apps/deploy/keeper",
+	"apps/observe/meter",
 	"libs/deploy",
 ]
 

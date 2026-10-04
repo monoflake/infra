@@ -6,21 +6,20 @@
  * See spec/architecture/host.md, "The machine pulls; nothing pushes into it".
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INFRA } from '@monoflake/urls';
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const USAGE = 'usage: host deploy <name> | host image <name> <path>';
 
-/** Where an app's directory sits: `apps/` until it moves under its layer. See graph.py. */
-const APP_ROOTS = ['apps', 'infra/apps', 'platform/apps', 'services/apps'];
-
-/** The app's directory, under whichever layer holds it. */
+/** The app's directory, under whichever group of `apps/` holds it. See spec/repository.md. */
 function appDirectory(name: string): string {
-	const found = APP_ROOTS.map((root) => join(ROOT, root, name)).find((dir) => existsSync(dir));
+	const found = readdirSync(join(ROOT, 'apps'))
+		.map((group) => join(ROOT, 'apps', group, name))
+		.find((dir) => existsSync(dir));
 	return found ?? fail(`no app named ${name}`);
 }
 

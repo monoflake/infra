@@ -69,7 +69,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/deploy"
           repos/infra/.mise/tasks/image "$APP" "$RUNNER_TEMP/deploy/image.tar"
-          cp "repos/infra/apps/$APP/service.toml" "$RUNNER_TEMP/deploy/"
+          cp repos/infra/apps/*/"$APP"/service.toml "$RUNNER_TEMP/deploy/"
       # The image layers are compressed already; the node needs it for as long as a deploy takes.
       - uses: actions/upload-artifact@v7
         with:
