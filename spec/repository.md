@@ -4,8 +4,9 @@ The infrastructure of the author's system, the layer everything else is deployed
 runs every app on a node, and `keeper`, which replaces host; `panel`, host's interface; `meter`,
 which samples the node; and `caddy`, `tunnel` and `resolver`, the doors a request comes in by.
 `libs/deploy` is what host and keeper share, and `libs/urls` the addresses of all of it. Why the
-system is cut into this layer, the platform's and the services', is
-[architecture/layers.md](architecture/layers.md).
+system is cut into this layer, the platform's and the services', is web's
+`spec/architecture/layers.md`, which the four repositories share, as they share its
+`spec/architecture/workspace.md` and `spec/toolchain.md`: what is here is what infra alone decides.
 
 ## `apps/` is deployed, `libs/` is imported
 
@@ -25,6 +26,21 @@ spec here never writes one.
 the apps they run, and those are the platform's: `libs/deploy/fixtures/` keeps a copy of each
 declaration a test reads. A platform change that a reader here must accept is copied in with the
 change that makes it accept it.
+
+## Reaching the LAN from a browser that cannot
+
+**`mise run reach [name]` answers on `http://localhost:26520` for `<name>.internal.ixc.one`**, host's
+panel when no name is given. macOS asks before a program reaches the local network, and a browser
+an agent drives, like node from mise, is refused; the system's own `ssh` and `curl` never are.
+So [`reach.ts`](../apps/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
+port and speaks to that alone, sending every request as the name would arrive: TLS with the name
+as SNI and as `Host`, so Caddy routes it. Caddy's guard sees the node's own address, which is a
+LAN one; a tunnel to the node's loopback is refused by the same guard, which is why the far end
+is the LAN address.
+
+Plain HTTP on this side, because localhost is a secure context: the session cookie's `Secure` is
+kept and still sent. The port is `REACH_PORT` in `libs/urls`, beside the pinned ones and outside
+their map, since what answers there is not an app.
 
 ## Publishing
 

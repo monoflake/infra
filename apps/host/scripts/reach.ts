@@ -1,7 +1,7 @@
 /**
  * `mise run reach [name]`: answer on `http://localhost:REACH_PORT` for `<name>.internal.ixc.one`,
  * which only the LAN reaches -- `panel` when no name is given. For a browser this machine refuses
- * the local network to, which still reaches localhost. See spec/toolchain.md, "Reaching the LAN
+ * the local network to, which still reaches localhost. See spec/repository.md, "Reaching the LAN
  * from a browser that cannot".
  *
  * Two hops. ssh, being the system's own, is let onto the LAN and carries the node's port 443 to a

@@ -1,6 +1,7 @@
 /**
  * Infra's own addresses: the panel, keeper and host, which bootstrap everything else and so are
- * named below it. See spec/architecture/layers.md, "Addresses are split by who owns the name".
+ * named below it. See web's spec/architecture/layers.md, "Addresses are split by who owns the
+ * name".
  */
 import { PORT_OFFSET } from '@canmi/me/urls';
 
@@ -17,7 +18,7 @@ export const PANEL_PORT = 26519;
 
 /**
  * Where `mise run reach` answers: a plain-HTTP door on this machine to an interface that only the
- * LAN reaches. Not an app, so it is kept out of the pinned ports. See spec/toolchain.md, "Reaching
+ * LAN reaches. Not an app, so it is kept out of the pinned ports. See spec/repository.md, "Reaching
  * the LAN from a browser that cannot".
  */
 export const REACH_PORT: number = 26520 + PORT_OFFSET;

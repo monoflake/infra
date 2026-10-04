@@ -1,6 +1,6 @@
 # Inspect: what the node is, asked of host
 
-An agent working on the platform used to answer its questions over SSH: which containers run, on
+An agent working on the node used to answer its questions over SSH: which containers run, on
 which networks, with which mounts; what a directory holds; whether the kernel killed something.
 **host answers them instead, read-only, on its API, behind its token**, and SSH is kept for the
 day that API is what broke. The same answers are what the panel's pages draw -- its file manager,

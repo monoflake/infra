@@ -2,8 +2,8 @@
 
 `apps/host` is a small deployment platform for the always-on machine on the home network -- the one
 milestones D1 and D2 in web's `spec/todo/milestones.md` assume. An app in this
-repository declares that it runs there the way another declares a Worker, and a push to `main` then
-reaches it without anybody logging into the machine. Images somebody else publishes are not declared
+repository or in the platform's declares that it runs there, and a push to that repository's `main`
+then reaches it without anybody logging into the machine. Images somebody else publishes are not declared
 here; they are managed from host's panel.
 
 The machine has no inbound public address. It reaches out through a Cloudflare tunnel, and it is on
@@ -20,7 +20,8 @@ A service's name is what code and people use; the label is what the address says
 change without the service being renamed.
 
 - A name and a label are DNS labels: lowercase letters, digits and hyphens.
-- Apps from this repository and images from elsewhere share the one namespace of names, and apps
+- Apps from every repository a node deploys from, and images from elsewhere, share the one
+  namespace of names, and apps
   and routes share the one namespace of labels: no two things answer on one label.
 - `host` and `keeper` are reserved names for the two programs below, `meter` for what samples the
   machine ([meter.md](meter.md)), `api` for the API host, `gateway` for the Worker answering it
@@ -40,7 +41,7 @@ change without the service being renamed.
 
 **A label is declared in the repository, and the panel will write it there.** The rule for every
 setting the panel can change: git is the one record, and a change made in the panel becomes a
-pull request against the repository that a bot opens, deployed like any other change once it is
+pull request against the repository the app's declaration lives in, which a bot opens, deployed like any other change once it is
 merged. Until then the panel shows it as pending. The bot is a GitHub account of its own, a
 collaborator given access to the repository like a person, so what it proposes is reviewed like
 anyone's and its token opens pull requests and nothing more. It is not built yet; until it is, a
@@ -91,20 +92,26 @@ So the direction is reversed, and trust is moved off the channel.
   cost that stops small apps being written. The build is `.mise/tasks/image`, the same one a local
   deploy runs, and CI checks the workspace out around this repository so the compiler is the one
   its `rust-toolchain.toml` names.
-- When the run ends, **GitHub's webhook** tells a Worker, which checks the delivery's signature and
-  passes the run's number on -- see platform's `spec/architecture/services.md`, "Every node is the same node".
+- When the run ends, **GitHub's webhook**, set on `monoflake/infra` and `monoflake/platform` alike,
+  tells the platform's hook on `api.monoflake.com`, which checks the delivery's signature and passes
+  the run's number and its repository to the node's host, and to keeper -- see platform's
+  `spec/architecture/services.md`, "Every node is the same node".
   There is no polling and no step in the workflow for it; the event says exactly which run ended,
   and that it succeeded.
-- host asks GitHub about that run with a read-only token scoped to its sources' Actions, and **runs
-  nothing unless the answer is one of its sources' deploy workflows, on `main`, finished and
-  successful**; then downloads the artifact and checks it against the digest GitHub recorded. The
+- host asks GitHub about that run with `GITHUB_ACTIONS_TOKEN`, a fine-grained token owned by the
+  monoflake organization with Actions read on its sources, and **runs nothing unless the answer is
+  one of its sources' `.github/workflows/deploy.yml`, on `main`, finished and successful** -- the
+  one path `libs/deploy`'s `WORKFLOW` accepts; then downloads the artifact and checks it against the digest GitHub recorded. The
   notice is a hint, not an authority: a forged one can at worst redeploy what `main` already built.
 - **A node's sources are its own to name**, in `DEPLOY_SOURCES` in the node's `.env`, as
   `owner/name` pairs: a run is numbered within its repository, so a notice names the repository
   with the run, and one that names a repository the node does not list is refused before GitHub is
-  asked. Without the list a node deploys nothing rather than guessing. The hook keeps a list of its
-  own, `DEPLOY_SOURCES` in the sdk, to pass on only what some node might take; the node's decides.
-  A notice that names no repository, from before they did, means the node's one source.
+  asked. Without the list a node deploys nothing rather than guessing; today it is
+  `monoflake/infra monoflake/platform`. The hook keeps a list of its own, `DEPLOY_SOURCES` exported
+  by the platform's `@monoflake/sdk`, the same two, to pass on only what some node might take; the
+  node's decides. A repository outside the organization, such as `canmi21/web`, cannot be a source
+  without a second token. A notice that names no repository, from before they did, means the
+  node's source only on a node with one; a node with two refuses it.
 
 **Rejected: verifying a Sigstore attestation of each archive.** An attestation proves an artifact came
 from a given repository's workflow on a given ref, which is what matters when the artifact is taken
@@ -145,7 +152,7 @@ grant it is refused before anything is stopped, rather than run sandboxed to fai
 A grant alone does nothing either, since an app that asks for no role gets none. So a role is the
 operator's decision as every privilege here is, and host knows roles rather than the names of the
 services that hold them -- which is what lets infra be built without naming anything above it. See
-[layers.md](layers.md), "What the package graph cannot see".
+web's `spec/architecture/layers.md`, "What the package graph cannot see".
 
 Infra's own are the exception, shaped by name as before: host and keeper, the meter, Caddy, the
 tunnel and the resolver are what the node is made of, and naming them is infra naming itself.
@@ -158,7 +165,7 @@ since it was written by the app. A user named rather than numbered would need th
 table, which host does not read, and is left as root's.
 
 **Every container has a memory ceiling, and no swap past it.** A declaration states `memory_mb` and
-host gives 512 without one; the platform's own two containers get theirs the same way, and swap is
+host gives 512 without one; host's and keeper's own containers get theirs the same way, and swap is
 set equal to the limit, since a ceiling that can be exceeded into swap only makes the machine
 slower. Each figure is the container's measured use with room above it: geo, measured at 290 MiB
 held and 130 more pushed into swap against a 512 limit it met sixty times, has 768; host 128,
@@ -168,12 +175,12 @@ fetching host's image, and at a ceiling of 16 it was killed mid-deploy.
 
 ### An image is built for speed, and for any node of its architecture
 
-Every image compiles its binary with the `container` profile in the workspace's `Cargo.toml`: full
-optimisation with fat LTO and one codegen unit, no debug information and no symbols. Speed is
+Every image compiles its binary with the `container` profile in this repository's `Cargo.toml`, as in the platform's: full
+optimization with fat LTO and one codegen unit, no debug information and no symbols. Speed is
 chosen over size because a server pays for its binary on every request and for its bytes never;
 the build is slower, and it runs on the Mac, where nobody is waiting on a request. No `target-cpu`
 is set, so an image is not tied to the chip of the node it was first built for. The profile is its
-own rather than `release`, which a local build of `local` would otherwise inherit and pay for.
+own rather than `release`, which a local release build would otherwise inherit and pay for.
 
 **An image is the binary on `scratch` and nothing else.** Each program is linked statically against
 musl, so it needs no C library from the image, and the image holds the binary and, for geo, its
@@ -189,8 +196,9 @@ An app states what it needs in `apps/<name>/service.toml` and ships it with its 
 program deployed apart from the file it reads, so the file carries a `version` and host refuses one
 it does not know before reading anything else, while a key it does not know is ignored -- see the
 workspace's `json.md`. What the keys are is
-[manifest/mod.rs](../../libs/deploy/src/manifest/mod.rs); host reads geo's own file in its tests, so
-the reader and a real declaration cannot drift apart.
+[manifest/mod.rs](../../libs/deploy/src/manifest/mod.rs); `libs/deploy`'s tests read the copies of the
+platform's declarations under `libs/deploy/fixtures/` -- see [../repository.md](../repository.md) --
+so a change there is copied in with the reader that accepts it.
 
 An upload is written to disk whole before anything is stopped, so a transfer cut short never leaves
 an app down.
@@ -221,12 +229,12 @@ it. So there are two programs, and each updates the other, never itself.
   puts the previous host back.
 - **host** deploys everything else, keeper included.
 
-**The platform's shape is chosen by name, never by a declaration.** host and keeper run privileged,
+**Infra's shape is chosen by name, never by a declaration.** host and keeper run privileged,
 with the Docker socket and the whole of `/data`; `meter` runs as an observer, which
 [meter.md](meter.md) describes; and every other app runs as the section on what a deployment may
 ask for describes. Which shape a container gets is decided by the program deploying it from the
-app's name -- `host`, `keeper` and `meter`, and only those -- so no `service.toml` can ask for the
-platform's reach. host deploys keeper and the meter; keeper deploys host. Both start from the one `.env` in host's directory, which is why the token has
+app's name -- `host`, `keeper` and `meter`, and only those -- so no `service.toml` can ask for
+infra's reach. host deploys keeper and the meter; keeper deploys host. Both start from the one `.env` in host's directory, which is why the token has
 one home on the machine.
 
 **keeper keeps no state.** Every container carries the version it runs in a label, so keeper reads
@@ -375,7 +383,7 @@ the tailnet's split DNS.
 Dockerfile that is the upstream image at a pinned version, with only what the node needs said on
 top -- its user by number, where its data and its port are. A new version is that one line changed,
 and CI deploys it as it deploys everything. What it keeps secret stays in its `secret.env` on the
-node and never reaches the repository. `gemini` and `tunnel` came in this way; an app with a page
+node and never reaches the repository. `tunnel` here, and the platform's `gemini`, came in this way; an app with a page
 not at its root declares `home` under `[interface]`, and Caddy sends `/` there.
 
 ### host renders all of Caddy, and Caddy remembers nothing
@@ -460,7 +468,7 @@ for what carries no class -- web's `spec/architecture/css/layers.md` decides whi
 and development arrangements there are copied rather than re-derived. Its colors are Nord's, one
 theme and dark, with no light twin: the sixteen are declared under their own names in `panel.css`,
 what the panel means by each is declared beside them, and a surface in `src/lib/style/` reads the
-meaning. They are its own rather than `lib/pkgs/kit/tokens`', which is the site's. Icons are Lucide's, and
+meaning. They are its own rather than `@canmi/kit`'s tokens, which are the site's. Icons are Lucide's, and
 what moves -- a page arriving, the sidebar's marker crossing to the next page -- moves on
 `@canmi/kit/motion`'s timing, as the editor's panels do.
 
@@ -471,7 +479,7 @@ Svelte's back. The rest of d3 -- selections, transitions, its axis generator -- 
 would draw on its own, and the motion is `@canmi/kit/motion`'s. A chart of bytes ticks in binary
 units, and a series breaks where points are missing rather than drawing across the gap. **A fill is
 for a chart of one or two lines.** One line keeps its gradient and two share it; three or more are
-drawn as lines alone, because every fill layered on the others washes the plot toward grey.
+drawn as lines alone, because every fill layered on the others washes the plot toward gray.
 
 **The machine's names are made readable where they are shown, never where they are kept.** A
 thermal zone arrives as its driver calls it -- `bigcore`, `littlecore`, `ddr` -- and the panel's
@@ -503,7 +511,7 @@ host's state is four SQLite files by what they hold, since a file costs nothing 
 subject keeps each small, separately inspectable and separately backed up: `apps.db`, what runs
 now and what is held stopped; `routes.db`, the names that reach something host does not run;
 `history.db`, every event; and `images.db`, each image flagged for removal and since when. They sit in host's own data directory. A single `host.db` from before
-the split is read into them once and renamed aside.
+the state was split into four files is read into them once and renamed aside.
 
 **Every event is kept, and none is pruned.** A deploy, a redeploy, a rollback of either kind, a
 start, a stop, a restart and a deploy skipped are each a row: which app, what started it -- a CI run
@@ -549,7 +557,7 @@ Every one of them is confirmed twice.
 keeps no record and host none of itself: its logs and its version are there, with no previous
 version and no environment, which is its `.env` beside the compose file and read by nothing here.
 
-**The platform's own five -- host, keeper, Caddy, the tunnel and the panel -- are restarted from
+**The node's own five -- host, keeper, Caddy, the tunnel and the panel -- are restarted from
 the panel and never stopped or started.** Each stopped takes the panel, the way in or the way back
 with it: host answers the panel, the panel is the interface, Caddy carries it, the tunnel is the
 public side and CI's notices, and keeper is what replaces host. host does not redeploy or roll

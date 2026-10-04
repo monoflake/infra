@@ -18,7 +18,7 @@ differences, and host gives them to the name `meter` and to nothing else:
   would not do: Docker masks `/sys/firmware`, where the board names itself. The image points the
   meter at the two with `METER_PROC` and `METER_SYS`.
 
-It is built and deployed as geo is, from its `service.toml`, by CI and by host; being reserved,
+It is built and deployed as any app here is, from its `service.toml`, by CI and by host; being reserved,
 the name cannot be taken by an app, and host is the only one that deploys it.
 
 ## Metrics
