@@ -147,7 +147,7 @@ mod tests {
 	fn a_socket_only_service_is_reached_at_where_host_mounts_it() {
 		let text = "version = 1\nname = \"apt\"\nplacements = [\"home\"]\n[container]\nhealth = \"/health\"\nsocket = \"apt.sock\"\n[data]\npath = \"/data\"\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\ntimeout = 1800\n";
 		let deployed = app(text);
-		let table = table(&[deployed.clone()]);
+		let table = table(std::slice::from_ref(&deployed));
 		let job = &table.jobs[0];
 		assert_eq!(job.reach, Reach::Socket { socket: "/sockets/apt/apt.sock".into() });
 		assert_eq!(job.timeout, 1800);

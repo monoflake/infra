@@ -85,7 +85,7 @@ async fn listing(directory: &FsPath) -> std::io::Result<Vec<Entry>> {
 }
 
 async fn answer(host: &Host, app: &str, requested: Option<&str>) -> Response {
-	if let Err(refused) = api::known(host, app) {
+	if let Some(refused) = api::refusal(host, app) {
 		return refused;
 	}
 	let root = host.volumes.root(app);

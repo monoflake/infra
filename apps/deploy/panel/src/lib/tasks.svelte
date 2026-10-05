@@ -29,7 +29,7 @@
 	/** Built from services seen so far: there is no endpoint that lists them on their own. */
 	let serviceFilter = $state('all');
 	const services = $derived(
-		Array.from(new Set(tasks.map((task) => task.service))).sort((a, b) => a.localeCompare(b)),
+		Array.from(new Set(tasks.map((task) => task.service))).toSorted((a, b) => a.localeCompare(b)),
 	);
 
 	const filter = $derived<TaskFilter>({

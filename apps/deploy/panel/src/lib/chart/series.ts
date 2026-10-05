@@ -53,9 +53,9 @@ const full = new Intl.DateTimeFormat(undefined, {
 
 /** How a tick names its moment, given how much time the axis spans. */
 export function tickLabel(span: number): (moment: Date) => string {
-	if (span <= 180) return (moment) => seconds.format(moment);
-	if (span <= 2 * 86400) return (moment) => clock.format(moment);
-	return (moment) => day.format(moment);
+	if (span <= 180) return (when) => seconds.format(when);
+	if (span <= 2 * 86400) return (when) => clock.format(when);
+	return (when) => day.format(when);
 }
 
 /** A moment in full, for the tooltip. */

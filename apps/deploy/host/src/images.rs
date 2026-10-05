@@ -200,7 +200,7 @@ async fn classified(host: &Host) -> anyhow::Result<Vec<(Image, Kept)>> {
 	let apps = host.store.apps()?;
 	let used = host.engine.images_in_use().await?;
 	let mut images = host.engine.images().await?;
-	images.sort_by(|a, b| b.created.cmp(&a.created));
+	images.sort_by_key(|image| std::cmp::Reverse(image.created));
 	Ok(
 		images
 			.into_iter()

@@ -424,7 +424,7 @@ async fn logs(
 	Path(name): Path<String>,
 	Query(asked): Query<Lines>,
 ) -> Response {
-	if let Err(refused) = known(&host, &name) {
+	if let Some(refused) = refusal(&host, &name) {
 		return refused;
 	}
 	let count = asked.lines.unwrap_or(LINES).clamp(1, MOST_LINES);
@@ -442,7 +442,7 @@ struct Archived {
 
 /// Every archived log of the app, the newest first.
 async fn archived(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
-	if let Err(refused) = known(&host, &name) {
+	if let Some(refused) = refusal(&host, &name) {
 		return refused;
 	}
 	let directory = host.volumes.logs(&name);
@@ -465,7 +465,7 @@ async fn archived_file(
 	State(host): State<Arc<Host>>,
 	Path((name, file)): Path<(String, String)>,
 ) -> Response {
-	if let Err(refused) = known(&host, &name) {
+	if let Some(refused) = refusal(&host, &name) {
 		return refused;
 	}
 	if !archive_name(&file) {
@@ -486,7 +486,7 @@ fn archive_name(file: &str) -> bool {
 
 /// The app's environment as the panel may see it: configuration in full, secrets by name.
 async fn environment(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
-	if let Err(refused) = known(&host, &name) {
+	if let Some(refused) = refusal(&host, &name) {
 		return refused;
 	}
 	match environment::shown(&host.volumes.root(&name)) {
@@ -524,7 +524,7 @@ fn change_variable(
 	key: &str,
 	value: Option<&str>,
 ) -> Response {
-	if let Err(refused) = known(host, name) {
+	if let Some(refused) = refusal(host, name) {
 		return refused;
 	}
 	// host reads its `.env` beside the compose file, not the two files an app's environment is.
@@ -543,17 +543,16 @@ fn change_variable(
 	}
 }
 
-/// An app host runs, or the refusal to answer for one it does not.
-/// An app whose logs, history, environment and files may be read: one the store holds, or host
-/// itself.
-pub(crate) fn known(host: &Host, name: &str) -> Result<(), Response> {
+/// The refusal to answer for an app, or none for one whose logs, history, environment and files
+/// may be read: one the store holds, or host itself.
+pub(crate) fn refusal(host: &Host, name: &str) -> Option<Response> {
 	if name == "host" {
-		return Ok(());
+		return None;
 	}
 	match host.store.app(name) {
-		Ok(Some(_)) => Ok(()),
-		Ok(None) => Err(response::failure(StatusCode::NOT_FOUND, "no_such_app")),
-		Err(error) => Err(failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error)),
+		Ok(Some(_)) => None,
+		Ok(None) => Some(response::failure(StatusCode::NOT_FOUND, "no_such_app")),
+		Err(error) => Some(failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error)),
 	}
 }
 

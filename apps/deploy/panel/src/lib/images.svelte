@@ -134,7 +134,7 @@
 
 	function describe(task: ImageTask): string {
 		if (task.kind === 'collect') return 'Collect every unneeded image';
-		const image = images.find((image) => image.id === task.image);
+		const image = images.find((each) => each.id === task.image);
 		return `Remove ${image ? named(image) : short(task.image)}`;
 	}
 

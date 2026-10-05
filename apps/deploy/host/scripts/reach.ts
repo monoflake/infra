@@ -44,6 +44,7 @@ function freePort(): Promise<number> {
 /** Waits until ssh has bound its end, or gives up; a tunnel that never came up is an error. */
 async function listening(port: number, deadline: number): Promise<void> {
 	while (Date.now() < deadline) {
+		// oxlint-disable-next-line no-await-in-loop -- a poll, each asked after the last wait
 		const open = await new Promise<boolean>((resolve) => {
 			const probe = plain({ host: '127.0.0.1', port, method: 'HEAD', timeout: 500 });
 			probe.on('response', () => resolve(true));
@@ -52,6 +53,7 @@ async function listening(port: number, deadline: number): Promise<void> {
 			probe.end();
 		});
 		if (open) return;
+		// oxlint-disable-next-line no-await-in-loop -- the wait between two asks
 		await new Promise((resolve) => setTimeout(resolve, 200));
 	}
 	throw new Error('the tunnel did not come up');

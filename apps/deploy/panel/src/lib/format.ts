@@ -72,8 +72,8 @@ export function until(stamp: string | undefined, now = Date.now()): string {
 	let [size, unit] = steps[0]!;
 	for (const step of steps) if (abs >= step[0]) [size, unit] = step;
 	const count = Math.round(abs / size);
-	const span = `${count} ${unit}${count === 1 ? '' : 's'}`;
-	return past ? `${span} overdue` : `in ${span}`;
+	const phrase = `${count} ${unit}${count === 1 ? '' : 's'}`;
+	return past ? `${phrase} overdue` : `in ${phrase}`;
 }
 
 /**

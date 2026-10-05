@@ -115,7 +115,7 @@ pub async fn snapshots(snapshots_root: &Path) -> Vec<Snapshot> {
 			all.push(Snapshot { name, app: app.clone(), created: zoned.timestamp() });
 		}
 	}
-	all.sort_by(|a, b| b.created.cmp(&a.created));
+	all.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.created));
 	all
 }
 

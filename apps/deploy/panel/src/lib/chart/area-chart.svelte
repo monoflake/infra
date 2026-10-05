@@ -83,30 +83,31 @@
 		return scale.domain([0, top]).nice(4);
 	});
 
+	const defined = (point: Datum) => !Number.isNaN(point.value);
+	const across = (point: Datum) => x(new Date(point.at * 1000));
+
 	const shapes = $derived(
 		lines.map((line) => {
 			const points = withGaps(line.points);
-			const defined = (point: Datum) => !Number.isNaN(point.value);
-			const at = (point: Datum) => x(new Date(point.at * 1000));
 			return {
 				line,
 				fill: area<Datum>()
 					.defined(defined)
 					.curve(curveMonotoneX)
-					.x(at)
+					.x(across)
 					.y0(y(0))
 					.y1((point) => y(point.value))(points),
 				stroke: linePath<Datum>()
 					.defined(defined)
 					.curve(curveMonotoneX)
-					.x(at)
+					.x(across)
 					.y((point) => y(point.value))(points),
 				band:
 					band && points.some((point) => point.minimum !== undefined)
 						? area<Datum>()
 								.defined(defined)
 								.curve(curveMonotoneX)
-								.x(at)
+								.x(across)
 								.y0((point) => y(point.minimum ?? point.value))
 								.y1((point) => y(point.maximum ?? point.value))(points)
 						: null,

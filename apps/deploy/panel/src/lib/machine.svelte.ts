@@ -122,7 +122,7 @@ export class Machine {
 	names(prefix: string): string[] {
 		return Object.keys(this.latest?.values ?? {})
 			.filter((name) => name.startsWith(`${prefix}.`))
-			.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+			.toSorted((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 	}
 
 	async #seed() {

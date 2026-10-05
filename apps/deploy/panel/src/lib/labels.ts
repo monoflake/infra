@@ -49,16 +49,14 @@ export function zoneLabel(zone: string): string {
 		.join(' ');
 }
 
+function rank(zone: string): number {
+	if (['package', 'soc', 'cpu'].includes(zone)) return 0;
+	if (CORES.test(zone)) return zone.startsWith('big') ? 1 : 2;
+	return 3;
+}
+
 /** The order zones are listed in: the whole chip, then its cores, then everything else by name. */
 export function zoneOrder(a: string, b: string): number {
-	const rank = (zone: string) =>
-		['package', 'soc', 'cpu'].includes(zone)
-			? 0
-			: CORES.test(zone)
-				? zone.startsWith('big')
-					? 1
-					: 2
-				: 3;
 	return rank(a) - rank(b) || a.localeCompare(b, undefined, { numeric: true });
 }
 
@@ -69,7 +67,7 @@ export function zoneOrder(a: string, b: string): number {
 export function clusterNames(clusters: Cluster[]): (string | undefined)[] {
 	const maxima = clusters.map((cluster) => cluster.max_frequency ?? 0);
 	if (clusters.length < 2 || new Set(maxima).size < 2) return clusters.map(() => undefined);
-	const ranked = [...new Set(maxima)].sort((a, b) => a - b);
+	const ranked = [...new Set(maxima)].toSorted((a, b) => a - b);
 	return maxima.map((max) => {
 		const place = ranked.indexOf(max);
 		if (place === 0) return TIERS.little;

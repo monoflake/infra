@@ -58,16 +58,19 @@
 	/** What carries this panel: restarting it drops the answer, so the page waits for it back. */
 	const onTheWay = $derived(name === 'host' || name === 'caddy' || name === 'panel');
 
+	const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 	/** Wait out a restart of what carries the panel: a moment, then until the app answers again. */
 	async function back() {
-		const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 		await pause(2000);
 		for (let tries = 0; tries < 30; tries += 1) {
 			try {
+				// oxlint-disable-next-line no-await-in-loop -- a poll, each asked after the last wait
 				if ((await api.app(name)).running) return;
 			} catch {
 				// Still restarting.
 			}
+			// oxlint-disable-next-line no-await-in-loop -- the wait between two asks
 			await pause(1000);
 		}
 	}
