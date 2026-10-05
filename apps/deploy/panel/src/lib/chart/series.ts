@@ -1,6 +1,6 @@
 /**
  * What a chart draws, and the arithmetic it needs before drawing: where a series has a gap, and
- * how a moment is labelled for the span on screen. Drawing is `area-chart.svelte`'s; d3 only
+ * how a moment is labeled for the span on screen. Drawing is `area-chart.svelte`'s; d3 only
  * computes, and Svelte renders.
  */
 

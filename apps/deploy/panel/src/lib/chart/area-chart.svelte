@@ -50,7 +50,7 @@
 	const id = $props.id();
 	/**
 	 * How strong each line's fill is. Fills are layered, and several colors layered wash out toward
-	 * grey: one line keeps its gradient, two share it, and three or more are drawn as lines alone.
+	 * gray: one line keeps its gradient, two share it, and three or more are drawn as lines alone.
 	 */
 	const fill = $derived(lines.length === 1 ? 0.32 : lines.length === 2 ? 0.16 : 0);
 	let width = $state(0);
