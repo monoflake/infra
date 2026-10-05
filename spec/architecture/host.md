@@ -620,8 +620,3 @@ container the paths are Linux's own, so host binds what it would bind on the mac
 
 A copy of the machine's four databases, read over SSH, gives the panel the real apps and history to
 draw; `docker cp` cannot see into the btrfs mount, so they go in through `docker exec -i`.
-
-## Open
-
-What is still undecided about placing services here is listed in platform's `spec/todo/milestones.md`
-and `spec/todo/gateway.md`.
