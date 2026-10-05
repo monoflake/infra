@@ -18,7 +18,8 @@ import { INFRA, REACH_PORT } from '@monoflake/urls';
 
 const HOME = new URL(INFRA.panel).hostname;
 const SUFFIX = HOME.slice(HOME.indexOf('.') + 1);
-const name = process.argv[2] ?? 'panel';
+// The panel's own label when none is given, which is `infra` and not the app's name.
+const name = process.argv[2] ?? HOME.slice(0, HOME.indexOf('.'));
 if (!/^[a-z0-9-]+$/.test(name)) {
 	console.error('usage: reach [name]');
 	process.exit(1);

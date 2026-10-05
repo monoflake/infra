@@ -212,7 +212,7 @@ fn lock(connection: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 }
 
 impl Store {
-	/// The three files in `directory`, made from a `host.db` there if it is the state from before
+	/// The four files in `directory`, made from a `host.db` there if it is the state from before
 	/// the split and they do not exist yet.
 	pub fn open(directory: &Path) -> Result<Self, Error> {
 		std::fs::create_dir_all(directory)?;

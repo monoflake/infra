@@ -3,8 +3,8 @@
 `apps/deploy/host` is a small deployment platform for the always-on machine on the home network -- the one
 milestones D1 and D2 in web's `spec/todo/milestones.md` assume. An app in this
 repository or in the platform's declares that it runs there, and a push to that repository's `main`
-then reaches it without anybody logging into the machine. Images somebody else publishes are not declared
-here; they are managed from host's panel.
+then reaches it without anybody logging into the machine. An image somebody else publishes comes in
+the same way, by a directory of its own -- see "An upstream image is adopted, not rebuilt".
 
 The machine has no inbound public address. It reaches out through a Cloudflare tunnel, and it is on
 the tailnet. Everything below is shaped by that and by there being exactly one user. Which services
@@ -24,23 +24,23 @@ change without the service being renamed.
   namespace of names, and apps
   and routes share the one namespace of labels: no two things answer on one label.
 - `host` and `keeper` are reserved names for the two programs below, `meter` for what samples the
-  machine ([meter.md](meter.md)), `api` for the API host, `gateway` for the Worker answering it
-  publicly, `caddy` for the door host deploys and `tunnel` for the way in from Cloudflare (both
-  below), `panel` for host's interface, and `cloudflared` because the tunnel ran under that name
-  before host deployed it.
+  machine ([meter.md](meter.md)), `api` for the API host, `caddy` for the door host deploys and
+  `tunnel` for the way in from Cloudflare (both below), `panel` for host's interface, `resolver`
+  for the house's DNS, and `cloudflared` because the tunnel ran under that name before host
+  deployed it. `gateway` is not among them: the platform's gateway is deployed here as an app.
 - **Labels are reserved too, for what is on its way**: `cms`, for the editor, which keeps its own
   address until it moves. No app or route may take a reserved label.
 - **The private suffix is a mirror of part of `.app`, and nothing else.** Every label is on `.app`, reached
   from the public side behind Access and from the LAN alike; `internal.ixc.one` carries a label only as a copy
   of what `.app` answers on it, same paths, same service, for reaching it on the LAN without
-  Access. A label may be left off `internal.ixc.one` -- `lan = false` on an interface or a route -- and nothing
+  Access. A label may be left off `internal.ixc.one` -- `lan = false` on an interface, `private = false` on a route -- and nothing
   is ever on `internal.ixc.one` alone. So keeper's whole interface is on `keeper.canmi.app` behind Access as
   well, and the API host answers every scope on both, the private ones included: the public never
   reaches a private scope, since Access stands in front of `api.canmi.app` and the gateway passes
   on only the scopes in its table, and our Workers reach every scope through the one VPC service.
 
 **A label is declared in the repository, and the panel will write it there.** The rule for every
-setting the panel can change: git is the one record, and a change made in the panel becomes a
+setting a declaration holds: git is the one record, and a change made in the panel becomes a
 pull request against the repository the app's declaration lives in, which a bot opens, deployed like any other change once it is
 merged. Until then the panel shows it as pending. The bot is a GitHub account of its own, a
 collaborator given access to the repository like a person, so what it proposes is reviewed like
@@ -158,7 +158,7 @@ Infra's own are the exception, shaped by name as before: host and keeper, the me
 tunnel and the resolver are what the node is made of, and naming them is infra naming itself.
 
 **An app's directory belongs to the user its image runs as.** host creates it as root, and an image
-that runs as someone else -- which every image from this repository does, as 65532 -- could not
+that runs as someone else -- the meter and the resolver as 65532, the panel as 1000 -- could not
 write to it. So before each version starts, host reads the image's `USER` and, when it is a number
 other than root, gives the directory itself to that user and group; what is inside is left alone,
 since it was written by the app. A user named rather than numbered would need the image's own user
@@ -175,14 +175,14 @@ fetching host's image, and at a ceiling of 16 it was killed mid-deploy.
 
 ### An image is built for speed, and for any node of its architecture
 
-Every image compiles its binary with the `container` profile in this repository's `Cargo.toml`, as in the platform's: full
+Every Rust program's image compiles its binary with the `container` profile in this repository's `Cargo.toml`, as in the platform's: full
 optimization with fat LTO and one codegen unit, no debug information and no symbols. Speed is
 chosen over size because a server pays for its binary on every request and for its bytes never;
 the build is slower, and it runs on the Mac, where nobody is waiting on a request. No `target-cpu`
 is set, so an image is not tied to the chip of the node it was first built for. The profile is its
 own rather than `release`, which a local release build would otherwise inherit and pay for.
 
-**An image is the binary on `scratch` and nothing else.** Each program is linked statically against
+**A Rust program's image is the binary on `scratch` and nothing else.** Each is linked statically against
 musl, so it needs no C library from the image, and the image holds the binary and, for geo, its
 data. musl's own allocator is slow under many small allocations, so every program sets mimalloc as
 its allocator; without it the static binary would be the slower one. host and keeper make btrfs's
@@ -233,8 +233,8 @@ it. So there are two programs, and each updates the other, never itself.
 with the Docker socket and the whole of `/data`; `meter` runs as an observer, which
 [meter.md](meter.md) describes; and every other app runs as the section on what a deployment may
 ask for describes. Which shape a container gets is decided by the program deploying it from the
-app's name -- `host`, `keeper` and `meter`, and only those -- so no `service.toml` can ask for
-infra's reach. host deploys keeper and the meter; keeper deploys host. Both start from the one `.env` in host's directory, which is why the token has
+app's name -- host, keeper, the meter, Caddy, the tunnel and the resolver, and only those -- so no
+`service.toml` can ask for infra's reach. host deploys keeper and the meter; keeper deploys host. Both start from the one `.env` in host's directory, which is why the token has
 one home on the machine.
 
 **keeper keeps no state.** Every container carries the version it runs in a label, so keeper reads
@@ -251,9 +251,10 @@ builds only what changed, so keeper's image moves only when keeper's code does.
 
 **keeper has its own intake.** `mise run host deploy host` goes to `keeper.internal.ixc.one`, never to
 host, and a notice about a run that built host goes to keeper too. Routed through host, a broken
-host would stand between the fix and the machine. keeper's interface is private to the LAN and the
-tailnet; on the tunnel's side it answers `/notice` and nothing else, since that is the path the
-Worker reaches it by, and a request there can only ask it to look at a run.
+host would stand between the fix and the machine. keeper's whole interface is on both suffixes,
+like any app's: `keeper.internal.ixc.one` on the LAN and the tailnet, and `keeper.canmi.app` behind
+Access. `/notice`, the path the Worker reaches it by, is one route of that interface rather than an
+exception cut through it, and a request there can only ask it to look at a run.
 
 **A run that built host is keeper's first, and host's only after.** The notice reaches both at once,
 and the first run that built both acted on it at once: host replaced keeper while keeper was
@@ -360,8 +361,9 @@ nothing about it is written by hand.
    in those zones -- `www.`, a record of the author's own -- goes on down the chain and answers as it
    does in public. Nothing outside the process is asked, so this step has nothing to fail on.
 2. **A filter**, when one is deployed -- an ad blocker, say -- asked first for every other name. It
-   is in the chain because it runs, and out of it because it does not, with nothing changed by
-   hand. A name it blocks comes back blocked: that is an answer, not a failure, and is not asked
+   is to be in the chain because it runs, and out of it because it does not, with nothing changed
+   by hand. The step is rendered and tested, but no deployment feeds it yet: host passes an empty
+   list of filters. A name it blocks comes back blocked: that is an answer, not a failure, and is not asked
    again further down. Its own upstream is the router or a public resolver, never this one, or a
    query would go round in a circle.
 3. **The router**, then **the public resolvers**, from host's configuration, since they are the
@@ -441,8 +443,10 @@ remedy is one request rather than a list of commands.
 
 **The panel is `apps/deploy/panel`, a SvelteKit server on Node, and host's interface; host itself has
 none.** host holds the Docker socket and the whole of `/data`, so what faces a browser is kept out
-of it: a panel broken into reaches host's API and nothing below it, and holds no token of its own to
-reach even that with -- it passes on the one the visitor signed in with. host deploys it like any
+of it: a panel broken into reaches host's API and the private services it shows -- cron and the
+ledger, over the private network -- and nothing below them, and holds no token of its own to reach
+any of them with. It passes host the one the visitor signed in with, and asks a private service only
+once host has confirmed that token, since those services ask for none themselves. host deploys it like any
 app, in the sandbox, under a reserved name, restarted and never stopped from itself.
 
 - **host answers on its own network alone.** It binds its port to its address on `app-host`,
@@ -450,7 +454,8 @@ app, in the sandbox, under a reserved name, restarted and never stopped from its
   app's health leaves that port out of reach. Nothing routes a name to host: `infra.internal.ixc.one` and
   `infra.canmi.app` are the panel's.
 - **The panel passes `/api/*` and `/notice` on to host**, carrying the session cookie as the
-  token, the request's type and the answer's cookies back, and nothing else of either. An upload is
+  token, the request's type and the headers an answer needs back -- its cookies, its caching, a
+  redirect or a download's name -- and nothing else. An upload is
   streamed through, never held. The hook's notice reaches host this way, and keeper's intake is
   unchanged.
 - **Pages are rendered on the server, and what moves is drawn in the browser.** The first paint
@@ -502,8 +507,8 @@ The API takes the cookie or an `Authorization` header alike, so scripts and keep
 The token is asked for on every door, the LAN's included; from the public, Access stands in front
 as well.
 
-**The first version covers the apps of this repository.** Images from elsewhere, notifications and
-a second node come after it.
+**Notifications and a second node come after the first version**, which deploys the apps of this
+repository and the platform's and adopts upstream images.
 
 ### What host keeps, and where
 
@@ -613,7 +618,7 @@ container the paths are Linux's own, so host binds what it would bind on the mac
    `HOST_API=http://localhost:11011 pnpm run dev` in `apps/deploy/panel`. Without `HOST_API` a
    development panel asks the running panel on the machine, signed in as the token mise decrypts.
 
-A copy of the machine's three databases, read over SSH, gives the panel the real apps and history to
+A copy of the machine's four databases, read over SSH, gives the panel the real apps and history to
 draw; `docker cp` cannot see into the btrfs mount, so they go in through `docker exec -i`.
 
 ## Open
