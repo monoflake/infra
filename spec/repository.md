@@ -4,9 +4,10 @@ The infrastructure of the author's system, the layer everything else is deployed
 runs every app on a node, and `keeper`, which replaces host; `panel`, host's interface; `meter`,
 which samples the node; and `caddy`, `tunnel` and `resolver`, the doors a request comes in by.
 `libs/deploy` is what host and keeper share, and `libs/urls` the addresses of all of it. Why the
-system is cut into this layer, the platform's and the services', is web's
-`spec/architecture/layers.md`, which the four repositories share, as they share its
-`spec/architecture/workspace.md` and `spec/toolchain.md`: what is here is what infra alone decides.
+system is cut into this layer, the platform's and the services', is the workspace's
+`spec/architecture/layers.md`, the picture of all
+four repositories; the rules every repository keeps are the workspace's `spec/`, and what is here is
+what infra alone decides.
 
 ## `apps/` is deployed, `libs/` is imported
 

@@ -152,7 +152,7 @@ grant it is refused before anything is stopped, rather than run sandboxed to fai
 A grant alone does nothing either, since an app that asks for no role gets none. So a role is the
 operator's decision as every privilege here is, and host knows roles rather than the names of the
 services that hold them -- which is what lets infra be built without naming anything above it. See
-web's `spec/architecture/layers.md`, "What the package graph cannot see".
+the workspace's `spec/architecture/layers.md`, "What the package graph cannot see".
 
 Infra's own are the exception, shaped by name as before: host and keeper, the meter, Caddy, the
 tunnel and the resolver are what the node is made of, and naming them is infra naming itself.

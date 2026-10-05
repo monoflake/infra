@@ -1,6 +1,7 @@
 /**
  * Infra's own addresses: the panel, keeper and host, which bootstrap everything else and so are
- * named below it. See web's spec/architecture/layers.md, "Addresses are split by who owns the
+ * named below it. See the workspace's spec/architecture/layers.md, "Addresses are split by who owns
+ * the
  * name".
  */
 export const INFRA = {
