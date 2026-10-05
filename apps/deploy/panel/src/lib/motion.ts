@@ -51,7 +51,7 @@ export function travel(
 	const duration = timing.duration * 1000;
 	marker.animate([{ transform: shift(from.start) }, { transform: shift(to.start) }], {
 		duration,
-		easing: curve(timing.centre),
+		easing: curve(timing.center),
 	});
 	marker.animate([{ [length]: `${from.size}px` }, { [length]: `${to.size}px` }], {
 		duration,

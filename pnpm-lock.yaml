@@ -198,8 +198,8 @@ importers:
   apps/deploy/panel:
     devDependencies:
       '@canmi/kit':
-        specifier: ^2026.1004.4
-        version: 2026.1004.4(@stylexjs/stylex@0.19.1)(svelte@5.57.1)
+        specifier: ^2026.1005.5
+        version: 2026.1005.5(@stylexjs/stylex@0.19.1)(svelte@5.57.1)
       '@canmi/me':
         specifier: ^2026.1004.4
         version: 2026.1004.4
@@ -360,8 +360,8 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@canmi/kit@2026.1004.4':
-    resolution: {integrity: sha512-xNgPLOaVhjSUAgfeBLjCZPvmYgo13aP5VtKANAQLaBPwEFQnxzaqi/oty00X0matmLJk87/E5/A3A4M+4LTKOw==}
+  '@canmi/kit@2026.1005.5':
+    resolution: {integrity: sha512-jGlVwHcW+0c44R3iEbOcpJGTw67UB1b8FdegEqD7vuV5epgQ0iIzkhHEnk2A9Q6HdP4CSgdIwgXrlrvQtq/VtQ==}
     peerDependencies:
       '@stylexjs/stylex': ^0.19.1
       svelte: ^5.57.1
@@ -1988,7 +1988,7 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@canmi/kit@2026.1004.4(@stylexjs/stylex@0.19.1)(svelte@5.57.1)':
+  '@canmi/kit@2026.1005.5(@stylexjs/stylex@0.19.1)(svelte@5.57.1)':
     dependencies:
       motion: 14.0.0
       thumbhash: 0.1.1
