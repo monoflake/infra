@@ -5,6 +5,7 @@
 	 * in from the left when it arrives. d3 computes the scales and the paths; the SVG is Svelte's.
 	 */
 	import * as stylex from '@stylexjs/stylex';
+	import { discloseD3 } from '@canmi/web/disclose';
 	import { bisector } from 'd3-array';
 	import { scaleLinear, scaleTime } from 'd3-scale';
 	import { area, curveMonotoneX, line as linePath } from 'd3-shape';
@@ -42,6 +43,9 @@
 		/** Draws the plot in again when it changes: the span chosen, never each new second. */
 		reveal?: string;
 	} = $props();
+
+	// D3 for Wappalyzer, from the one component that draws with it; see lib's spec/web/disclose.md.
+	discloseD3(import.meta.env.VITE_DISCLOSURE);
 
 	const id = $props.id();
 	/**

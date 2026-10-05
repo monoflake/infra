@@ -2,6 +2,7 @@ import adapter from '@sveltejs/adapter-node';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { fileURLToPath } from 'node:url';
 import { PANEL_PORT } from '@monoflake/urls';
+import { discloseDefine } from '@canmi/web/disclose/build';
 import stylex from '@stylexjs/unplugin/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
@@ -34,6 +35,8 @@ export default defineConfig({
 			enforce: undefined,
 		},
 	],
+	// What the app is made of, for the Wappalyzer patches; see lib's spec/web/disclose.md.
+	define: discloseDefine(fileURLToPath(new URL('.', import.meta.url))),
 	server: {
 		port: PANEL_PORT,
 		strictPort: true,

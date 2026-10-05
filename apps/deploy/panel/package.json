@@ -21,6 +21,7 @@
 		"@canmi/kit": "^2026.1004.4",
 		"@canmi/me": "^2026.1004.4",
 		"@canmi/response": "^2.0.0",
+		"@canmi/web": "^2026.1005.5",
 		"@lucide/svelte": "^1.51.0",
 		"@monoflake/urls": "workspace:*",
 		"@stylexjs/stylex": "^0.19.1",

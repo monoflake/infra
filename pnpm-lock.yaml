@@ -206,6 +206,9 @@ importers:
       '@canmi/response':
         specifier: ^2.0.0
         version: 2.0.0
+      '@canmi/web':
+        specifier: ^2026.1005.5
+        version: 2026.1005.5(@sveltejs/kit@3.0.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.1)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0)))
       '@lucide/svelte':
         specifier: ^1.51.0
         version: 1.51.0(svelte@5.57.1)
@@ -373,6 +376,20 @@ packages:
 
   '@canmi/response@2.0.0':
     resolution: {integrity: sha512-fQh5D0dAcdvccqWLcGQKzpGNa1TbyhZ+4B5kq5/LWPOnacdq5OY8uJoCn7zgdM0MNZMsZiDVsOXSu9fIQEdC4w==}
+
+  '@canmi/web@2026.1005.5':
+    resolution: {integrity: sha512-N6NhpbAM2lbGHydBdstIdaNJqC68yisxKfgIyKRMF2MmBwqbhU6JN8Tf1/mu0nFbGafmjhLD4yKljcHmgKX5Ug==}
+    peerDependencies:
+      '@sentry/sveltekit': ^11.4.0
+      '@sveltejs/kit': ^3.0.0
+      hono: ^4.13.12
+    peerDependenciesMeta:
+      '@sentry/sveltekit':
+        optional: true
+      '@sveltejs/kit':
+        optional: true
+      hono:
+        optional: true
 
   '@dual-bundle/import-meta-resolve@4.2.1':
     resolution: {integrity: sha512-id+7YRUgoUX6CgV0DtuhirQWodeeA7Lf4i2x71JS/vtA5pRb/hIGWlw+G6MeXvsM+MXrz0VAydTGElX1rAfgPg==}
@@ -1148,6 +1165,9 @@ packages:
   cookie@2.0.1:
     resolution: {integrity: sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w==}
     engines: {node: '>=22'}
+
+  core-js@3.50.0:
+    resolution: {integrity: sha512-BRWgOLKkFeCgRudR6zrs8p9XJZcE14grzKMMssoYrk6krtuEZ7MTKPIY5RzOnqsEKIR9kst7wNzphttraT+Yqw==}
 
   css-mediaquery@0.1.2:
     resolution: {integrity: sha512-COtn4EROW5dBGlE/4PiKnh6rZpAPxDeFLaEEwt4i10jpDMFt2EhQGS79QmmrO+iKCHv0PU/HrOWEhijFd1x99Q==}
@@ -1983,6 +2003,12 @@ snapshots:
 
   '@canmi/response@2.0.0': {}
 
+  '@canmi/web@2026.1005.5(@sveltejs/kit@3.0.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.1)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0)))':
+    dependencies:
+      core-js: 3.50.0
+    optionalDependencies:
+      '@sveltejs/kit': 3.0.0(@sveltejs/vite-plugin-svelte@7.3.1(svelte@5.57.1)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0)))(svelte@5.57.1)(typescript@6.0.3)(vite@8.3.2(@types/node@26.6.4)(jiti@2.7.0))
+
   '@dual-bundle/import-meta-resolve@4.2.1': {}
 
   '@jridgewell/gen-mapping@0.3.13':
@@ -2464,6 +2490,8 @@ snapshots:
   convert-source-map@2.0.0: {}
 
   cookie@2.0.1: {}
+
+  core-js@3.50.0: {}
 
   css-mediaquery@0.1.2: {}
 

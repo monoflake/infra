@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { dev } from '$app/env';
+	import { discloseGlobals, disclosureHead } from '@canmi/web/disclose';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { Snippet } from 'svelte';
@@ -44,11 +45,16 @@
 		await api.signOut().catch(() => undefined);
 		session.signedIn = false;
 	}
+
+	// What the app is made of, said for Wappalyzer from the build; see lib's spec/web/disclose.md.
+	const disclosure = import.meta.env.VITE_DISCLOSURE;
+	discloseGlobals(disclosure);
 </script>
 
 <svelte:head>
 	<!-- First in the head on purpose: it declares the order the layers below it take. -->
 	{#if dev}{@html DEV_STYLEX}{/if}
+	{@html disclosureHead(disclosure)}
 </svelte:head>
 
 {#if !signedIn}
