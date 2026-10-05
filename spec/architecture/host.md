@@ -623,4 +623,5 @@ draw; `docker cp` cannot see into the btrfs mount, so they go in through `docker
 
 ## Open
 
-What is still undecided about placing services here is listed in platform's `spec/architecture/services.md`.
+What is still undecided about placing services here is listed in platform's `spec/todo/milestones.md`
+and `spec/todo/gateway.md`.
