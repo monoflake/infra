@@ -40,7 +40,7 @@ pub struct Host {
 	pub images: images::Images,
 	/// When `cron` was last redeployed for its socket mounts, so a read-back that never settles
 	/// logs once and stops rather than redeploying it forever. See
-	/// `rollout::CRON_MOUNT_REDEPLOY_COOLDOWN`.
+	/// `rollout::tell::CRON_MOUNT_REDEPLOY_COOLDOWN`.
 	pub cron_mount_redeployed_at: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
