@@ -28,7 +28,7 @@ fn reads_the_declaration_geo_ships() {
 		},
 	];
 	assert_eq!(manifest.api, Some(Api { public: true, prefix: None, limits, sides: None }));
-	assert_eq!(manifest.check("geo", "home"), Ok(()));
+	assert_eq!(manifest.check("geo", "rdu"), Ok(()));
 }
 
 #[test]
@@ -62,59 +62,59 @@ fn a_node_runs_only_what_is_placed_on_it() {
 		manifest.check("geo", "vps"),
 		Err(Invalid::NotPlaced { name: "geo".into(), node: "vps".into() })
 	);
-	assert!(matches!(manifest.check("other", "home"), Err(Invalid::Mismatch { .. })));
+	assert!(matches!(manifest.check("other", "rdu"), Err(Invalid::Mismatch { .. })));
 }
 
 #[test]
 fn only_the_platforms_own_pass_its_own_check() {
 	let mut manifest = Manifest::parse(GEO).unwrap();
 	manifest.name = "keeper".into();
-	assert_eq!(manifest.check_own("keeper", "home"), Ok(()));
+	assert_eq!(manifest.check_own("keeper", "rdu"), Ok(()));
 	// The ordinary check still refuses the name, so no app can be sent as keeper.
-	assert_eq!(manifest.check("keeper", "home"), Err(Invalid::Reserved("keeper".into())));
+	assert_eq!(manifest.check("keeper", "rdu"), Err(Invalid::Reserved("keeper".into())));
 	assert_eq!(check_name("meter"), Err(Invalid::Reserved("meter".into())));
 	manifest.name = "api".into();
-	assert_eq!(manifest.check_own("api", "home"), Err(Invalid::Name("api".into())));
+	assert_eq!(manifest.check_own("api", "rdu"), Err(Invalid::Name("api".into())));
 }
 
 #[test]
 fn a_default_port_is_refused() {
 	let mut manifest = Manifest::parse(GEO).unwrap();
 	manifest.container.as_mut().unwrap().port = Some(8080);
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Port(8080)));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Port(8080)));
 }
 
 #[test]
 fn a_container_answers_on_a_port_or_a_socket() {
 	let socketed = |extra: &str| {
 		Manifest::parse(&format!(
-			"version = 1\nname = \"probe\"\nplacements = [\"home\"]\n{extra}\n[container]\nhealth = \"/health\"\nsocket = \"probe.sock\"\n[data]\npath = \"/data\"\n",
+			"version = 1\nname = \"probe\"\nplacements = [\"rdu\"]\n{extra}\n[container]\nhealth = \"/health\"\nsocket = \"probe.sock\"\n[data]\npath = \"/data\"\n",
 		))
 		.unwrap()
 	};
-	assert_eq!(socketed("").check("probe", "home"), Ok(()));
+	assert_eq!(socketed("").check("probe", "rdu"), Ok(()));
 	let mut both = socketed("");
 	both.container.as_mut().unwrap().port = Some(20000);
-	assert_eq!(both.check("probe", "home"), Err(Invalid::Answer));
+	assert_eq!(both.check("probe", "rdu"), Err(Invalid::Answer));
 	let mut neither = socketed("");
 	neither.container.as_mut().unwrap().socket = None;
-	assert_eq!(neither.check("probe", "home"), Err(Invalid::Answer));
+	assert_eq!(neither.check("probe", "rdu"), Err(Invalid::Answer));
 	let mut nested = socketed("");
 	nested.container.as_mut().unwrap().socket = Some("../probe.sock".into());
-	assert_eq!(nested.check("probe", "home"), Err(Invalid::Socket));
+	assert_eq!(nested.check("probe", "rdu"), Err(Invalid::Socket));
 	let mut homeless = socketed("");
 	homeless.data = None;
-	assert_eq!(homeless.check("probe", "home"), Err(Invalid::Socket));
+	assert_eq!(homeless.check("probe", "rdu"), Err(Invalid::Socket));
 	let routed = socketed("[api]\npublic = false");
-	assert_eq!(routed.check("probe", "home"), Err(Invalid::Unroutable));
+	assert_eq!(routed.check("probe", "rdu"), Err(Invalid::Unroutable));
 }
 
 #[test]
 fn a_node_refuses_a_service_with_no_container() {
 	let manifest =
-		Manifest::parse("version = 1\nname = \"edge\"\nplacements = [\"workers\", \"home\"]\n")
+		Manifest::parse("version = 1\nname = \"edge\"\nplacements = [\"workers\", \"rdu\"]\n")
 			.unwrap();
-	assert_eq!(manifest.check("edge", "home"), Err(Invalid::NoContainer("edge".into())));
+	assert_eq!(manifest.check("edge", "rdu"), Err(Invalid::NoContainer("edge".into())));
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn counts_a_prefix_beside_an_exact_path_it_does_not_cover() {
 	let rows = "[[api.limits]]\nmethods = [\"GET\"]\npath = \"/checks\"\ncount = 1\nseconds = 60\n\
 		[[api.limits]]\nmethods = [\"GET\"]\npath = \"/checks/*\"\ncount = 1\nseconds = 60";
 	let manifest = Manifest::parse(&format!("{GEO}\n{rows}\n")).unwrap();
-	assert_eq!(manifest.check("geo", "home"), Ok(()));
+	assert_eq!(manifest.check("geo", "rdu"), Ok(()));
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn refuses_a_limit_it_could_not_count() {
 	] {
 		let text = format!("{GEO}\n[[api.limits]]\n{broken}\n");
 		let manifest = Manifest::parse(&text).unwrap();
-		assert_eq!(manifest.check("geo", "home"), Err(Invalid::Limit), "{broken}");
+		assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Limit), "{broken}");
 	}
 }
 
@@ -183,33 +183,33 @@ fn names_its_sides_from_three_and_never_leaves_out_inside() {
 	assert!(api.carried_on("private") && api.carried_on("tunnel") && api.carried_on("inside"));
 	api.sides = Some(vec!["inside".into()]);
 	assert!(!api.carried_on("private") && api.carried_on("inside"));
-	assert_eq!(geo.check("geo", "home"), Ok(()));
+	assert_eq!(geo.check("geo", "rdu"), Ok(()));
 	for sides in [vec!["private"], vec!["inside", "outside"], vec![]] {
 		let mut broken = geo.clone();
 		broken.api.as_mut().unwrap().sides = Some(sides.iter().map(|side| (*side).into()).collect());
-		assert_eq!(broken.check("geo", "home"), Err(Invalid::Sides), "{sides:?}");
+		assert_eq!(broken.check("geo", "rdu"), Err(Invalid::Sides), "{sides:?}");
 	}
 }
 
 #[test]
 fn a_home_stays_on_the_apps_own_site() {
 	let gemini = Manifest::parse(include_str!("../../fixtures/gemini.toml")).unwrap();
-	assert_eq!(gemini.check("gemini", "home"), Ok(()));
+	assert_eq!(gemini.check("gemini", "rdu"), Ok(()));
 	for home in ["/", "admin", "//evil.example"] {
 		let mut elsewhere = gemini.clone();
 		elsewhere.interface.as_mut().unwrap().home = Some(home.into());
-		assert_eq!(elsewhere.check("gemini", "home"), Err(Invalid::Home), "{home}");
+		assert_eq!(elsewhere.check("gemini", "rdu"), Err(Invalid::Home), "{home}");
 	}
 	let tunnel =
 		Manifest::parse(include_str!("../../../../apps/network/tunnel/service.toml")).unwrap();
-	assert_eq!(tunnel.check_own("tunnel", "home"), Ok(()));
+	assert_eq!(tunnel.check_own("tunnel", "rdu"), Ok(()));
 }
 
 #[test]
 fn a_node_refuses_an_api_prefix() {
 	let mut manifest = Manifest::parse(GEO).unwrap();
 	manifest.api.as_mut().unwrap().prefix = Some("/api".into());
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Prefix));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Prefix));
 }
 
 #[test]
@@ -221,18 +221,18 @@ fn a_label_maps_an_apps_name_for_what_reaches_it_from_outside() {
 	let mut labeled = gemini.clone();
 	labeled.interface.as_mut().unwrap().domain = Some("infra".into());
 	assert_eq!(labeled.interface.as_ref().unwrap().label("gemini"), "infra");
-	assert_eq!(labeled.check("gemini", "home"), Ok(()));
+	assert_eq!(labeled.check("gemini", "rdu"), Ok(()));
 }
 
 #[test]
 fn a_reserved_label_is_refused() {
 	let mut manifest = Manifest::parse(GEO).unwrap();
 	manifest.interface = Some(Interface { domain: Some("cms".into()), lan: true, home: None });
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Reserved("cms".into())));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Reserved("cms".into())));
 	manifest.interface.as_mut().unwrap().domain = Some("host".into());
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Reserved("host".into())));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Reserved("host".into())));
 	manifest.interface.as_mut().unwrap().domain = Some("Geo".into());
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Label("Geo".into())));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Label("Geo".into())));
 }
 
 #[test]
@@ -250,7 +250,7 @@ fn objects_are_declared_as_buckets_s3_takes() {
 	let declared =
 		|buckets: &str| Manifest::parse(&format!("{GEO}\n[objects]\nbuckets = [{buckets}]\n")).unwrap();
 	let manifest = declared("\"photos\", \"thumbs.v2\"");
-	assert_eq!(manifest.check("geo", "home"), Ok(()));
+	assert_eq!(manifest.check("geo", "rdu"), Ok(()));
 	assert_eq!(manifest.sidecar().as_deref(), Some("geo-objects"));
 	assert_eq!(Manifest::parse(GEO).unwrap().sidecar(), None);
 	for broken in [
@@ -265,16 +265,16 @@ fn objects_are_declared_as_buckets_s3_takes() {
 		"ph_otos",
 	] {
 		let manifest = declared(&format!("\"{broken}\""));
-		assert_eq!(manifest.check("geo", "home"), Err(Invalid::Bucket(broken.into())), "{broken}");
+		assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Bucket(broken.into())), "{broken}");
 	}
-	assert_eq!(declared("").check("geo", "home"), Err(Invalid::Buckets));
-	assert_eq!(declared("\"photos\", \"photos\"").check("geo", "home"), Err(Invalid::Buckets));
+	assert_eq!(declared("").check("geo", "rdu"), Err(Invalid::Buckets));
+	assert_eq!(declared("\"photos\", \"photos\"").check("geo", "rdu"), Err(Invalid::Buckets));
 	let mut long = declared("\"photos\"");
 	long.name = "a".repeat(56);
 	let named = Invalid::SidecarName(format!("{}-objects", "a".repeat(56)));
-	assert_eq!(long.check(&"a".repeat(56), "home"), Err(named));
+	assert_eq!(long.check(&"a".repeat(56), "rdu"), Err(named));
 	long.name = "a".repeat(55);
-	assert_eq!(long.check(&"a".repeat(55), "home"), Ok(()));
+	assert_eq!(long.check(&"a".repeat(55), "rdu"), Ok(()));
 }
 
 #[test]
@@ -285,7 +285,7 @@ fn every_sidecar_name_is_reserved_and_the_driver_is_named_like_any_app() {
 	assert!(check_name("objects").is_ok());
 	let driver = Manifest::parse(include_str!("../../fixtures/objects.toml")).unwrap();
 	assert_eq!(driver.driver.as_ref().map(|driver| driver.provides.as_str()), Some("objects"));
-	assert_eq!(driver.check("objects", "home"), Ok(()));
+	assert_eq!(driver.check("objects", "rdu"), Ok(()));
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn databases_are_declared_each_with_an_optional_ceiling() {
 	let text = format!("{GEO}\n[postgres]\nmemory_mb = 192\n");
 	let manifest = Manifest::parse(&text).unwrap();
 	assert_eq!(manifest.postgres, Some(Database { memory_mb: Some(192) }));
-	assert_eq!(manifest.check("geo", "home"), Ok(()));
+	assert_eq!(manifest.check("geo", "rdu"), Ok(()));
 	assert_eq!(manifest.sidecars(), ["geo-postgres"]);
 	assert_eq!(Driver::Postgres.memory_mb(&manifest), Some(192));
 	// Objects are not declared, so its sidecar is not among them, and the one it names is none.
@@ -302,13 +302,13 @@ fn databases_are_declared_each_with_an_optional_ceiling() {
 	assert!(geo.sidecars().is_empty() && geo.postgres.is_none());
 
 	let unbounded = Manifest::parse(&format!("{GEO}\n[postgres]\nmemory_mb = 0\n")).unwrap();
-	assert_eq!(unbounded.check("geo", "home"), Err(Invalid::SidecarMemory("postgres".into())));
+	assert_eq!(unbounded.check("geo", "rdu"), Err(Invalid::SidecarMemory("postgres".into())));
 	let mut long = Manifest::parse(&format!("{GEO}\n[postgres]\n")).unwrap();
 	long.name = "a".repeat(55);
 	let named = Invalid::SidecarName(format!("{}-postgres", "a".repeat(55)));
-	assert_eq!(long.check(&"a".repeat(55), "home"), Err(named));
+	assert_eq!(long.check(&"a".repeat(55), "rdu"), Err(named));
 	long.name = "a".repeat(54);
-	assert_eq!(long.check(&"a".repeat(54), "home"), Ok(()));
+	assert_eq!(long.check(&"a".repeat(54), "rdu"), Ok(()));
 }
 
 #[test]
@@ -316,11 +316,11 @@ fn every_database_sidecar_name_is_reserved_and_only_a_driver_keeps_its_own_port(
 	assert_eq!(check_name("geo-postgres"), Err(Invalid::Reserved("geo-postgres".into())));
 	assert!(check_name("postgres-geo").is_ok());
 	let driver = Manifest::parse(include_str!("../../fixtures/postgres.toml")).unwrap();
-	assert_eq!(driver.check("postgres", "home"), Ok(()));
+	assert_eq!(driver.check("postgres", "rdu"), Ok(()));
 	// Only a driver keeps a port outside the services' range; an app on 5432 is still refused.
 	let mut geo = Manifest::parse(GEO).unwrap();
 	geo.container.as_mut().unwrap().port = Some(5432);
-	assert_eq!(geo.check("geo", "home"), Err(Invalid::Port(5432)));
+	assert_eq!(geo.check("geo", "rdu"), Err(Invalid::Port(5432)));
 }
 
 #[test]
@@ -329,7 +329,7 @@ fn lan_defaults_to_on_and_can_be_turned_off() {
 	assert!(gemini.interface.as_ref().unwrap().lan);
 	let mut off = gemini;
 	off.interface.as_mut().unwrap().lan = false;
-	assert_eq!(off.check("gemini", "home"), Ok(()));
+	assert_eq!(off.check("gemini", "rdu"), Ok(()));
 }
 
 #[test]
@@ -340,9 +340,9 @@ fn a_role_or_a_driver_is_asked_for_by_a_word_the_node_knows() {
 	let cron = Manifest::parse(include_str!("../../fixtures/cron.toml"));
 	assert_eq!(cron.unwrap().shape.map(|shape| shape.kind), Some("scheduler".into()));
 	let root = Manifest::parse(&format!("{GEO}\n[shape]\nkind = \"root\"\n")).unwrap();
-	assert_eq!(root.check("geo", "home"), Err(Invalid::Shape("root".into())));
+	assert_eq!(root.check("geo", "rdu"), Err(Invalid::Shape("root".into())));
 	let redis = Manifest::parse(&format!("{GEO}\n[driver]\nprovides = \"redis\"\n")).unwrap();
-	assert_eq!(redis.check("geo", "home"), Err(Invalid::Driver("redis".into())));
+	assert_eq!(redis.check("geo", "rdu"), Err(Invalid::Driver("redis".into())));
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn a_schedule_declares_exactly_one_clock() {
 		"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 4 * * *\"\nevery = \"1m\"\npath = \"/jobs/refresh\"\n"
 	);
 	let manifest = Manifest::parse(&text).unwrap();
-	assert_eq!(manifest.check("geo", "home"), Err(Invalid::Schedule("refresh".into())));
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Schedule("refresh".into())));
 }
 
 #[test]
@@ -367,12 +367,12 @@ fn a_schedule_reads_its_defaults_and_checks_its_shape() {
 	assert_eq!(schedule.catch_up, CatchUp::Once);
 	assert_eq!(schedule.overlap, Overlap::Skip);
 	assert_eq!(schedule.timeout, 300);
-	assert_eq!(manifest.check("geo", "home"), Ok(()));
+	assert_eq!(manifest.check("geo", "rdu"), Ok(()));
 
-	assert_eq!(scheduled("every = \"30s\"").check("geo", "home"), Ok(()));
+	assert_eq!(scheduled("every = \"30s\"").check("geo", "rdu"), Ok(()));
 	for broken in ["cron = \"0 4 * *\"", "cron = \"a 4 * * *\"", "every = \"m\"", "every = \"0s\""] {
 		assert_eq!(
-			scheduled(broken).check("geo", "home"),
+			scheduled(broken).check("geo", "rdu"),
 			Err(Invalid::Schedule("refresh".into())),
 			"{broken}"
 		);
@@ -381,24 +381,24 @@ fn a_schedule_reads_its_defaults_and_checks_its_shape() {
 		"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 4 * * *\"\npath = \"jobs/refresh\"\n"
 	))
 	.unwrap();
-	assert_eq!(no_slash.check("geo", "home"), Err(Invalid::Schedule("refresh".into())));
+	assert_eq!(no_slash.check("geo", "rdu"), Err(Invalid::Schedule("refresh".into())));
 	let too_long = scheduled("cron = \"0 4 * * *\"\ntimeout = 86401");
-	assert_eq!(too_long.check("geo", "home"), Err(Invalid::Schedule("refresh".into())));
+	assert_eq!(too_long.check("geo", "rdu"), Err(Invalid::Schedule("refresh".into())));
 }
 
 #[test]
 fn a_scheduled_service_answers_through_its_scope_or_its_socket() {
 	let socketed = Manifest::parse(
-		"version = 1\nname = \"probe\"\nplacements = [\"home\"]\n[container]\nhealth = \"/health\"\nsocket = \"probe.sock\"\n[data]\npath = \"/data\"\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\n",
+		"version = 1\nname = \"probe\"\nplacements = [\"rdu\"]\n[container]\nhealth = \"/health\"\nsocket = \"probe.sock\"\n[data]\npath = \"/data\"\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\n",
 	)
 	.unwrap();
-	assert_eq!(socketed.check("probe", "home"), Ok(()));
+	assert_eq!(socketed.check("probe", "rdu"), Ok(()));
 
 	let unreachable = Manifest::parse(
-		"version = 1\nname = \"probe\"\nplacements = [\"home\"]\n[container]\nhealth = \"/health\"\nport = 20000\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\n",
+		"version = 1\nname = \"probe\"\nplacements = [\"rdu\"]\n[container]\nhealth = \"/health\"\nport = 20000\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\n",
 	)
 	.unwrap();
-	assert_eq!(unreachable.check("probe", "home"), Err(Invalid::Unscheduled("probe".into())));
+	assert_eq!(unreachable.check("probe", "rdu"), Err(Invalid::Unscheduled("probe".into())));
 }
 
 #[test]
@@ -407,10 +407,10 @@ fn an_edge_claims_hostnames_and_nothing_else() {
 	let edge = gateway.edge.as_ref().expect("the gateway claims its names");
 	assert!(edge.hosts.iter().any(|host| host.starts_with("*.")));
 	assert!(edge.deployments.is_some());
-	assert_eq!(gateway.check("gateway", "home"), Ok(()));
+	assert_eq!(gateway.check("gateway", "rdu"), Ok(()));
 	for bad in ["*", "*.*.com", "localhost", "Api.example.com", "a..b"] {
 		let text = format!("{GEO}\n[edge]\nhosts = [\"{bad}\"]\n");
 		let manifest = Manifest::parse(&text).unwrap();
-		assert_eq!(manifest.check("geo", "home"), Err(Invalid::Edge(bad.into())), "{bad}");
+		assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Edge(bad.into())), "{bad}");
 	}
 }

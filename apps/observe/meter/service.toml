@@ -2,7 +2,7 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "meter"
-placements = ["home"]
+placements = ["rdu"]
 
 # No port and no network: host reads it on its socket. See spec/architecture/meter.md.
 [container]

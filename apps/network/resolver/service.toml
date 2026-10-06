@@ -3,7 +3,7 @@
 # the gateway's names, and passes the rest on".
 version = 1
 name = "resolver"
-placements = ["home"]
+placements = ["rdu"]
 
 [container]
 # Its health, which the rendered Corefile serves; DNS itself is the shape's to publish.

@@ -544,6 +544,10 @@ They sit in the app's subvolume, so the snapshot a deploy takes holds them, and 
 back puts the environment back with the code. A change applies when the container is next started
 from its version: the panel says so, and a redeploy does it.
 
+**host adds one variable of its own, `NODE`, the node's name**, over whatever the two files say, so
+an app knows where it runs without being told per node -- the probe records it as the place it
+looked from.
+
 ### What the panel can do to an app
 
 - **Redeploy** runs the current version again, as a deploy: snapshot, start, check, and the version

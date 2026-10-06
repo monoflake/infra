@@ -2,7 +2,7 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "panel"
-placements = ["home"]
+placements = ["rdu"]
 
 # Its name is reserved, and host runs it on its own network and on host's, where host's API is:
 # the one other container that reaches it. See spec/architecture/host.md, "The panel is an app of

@@ -131,7 +131,10 @@ fn shape_of(host: &Host, manifest: &Manifest) -> Result<Shape, Error> {
 			.map_err(|source| Error::Environment { path: path.display().to_string(), source })?;
 		return Ok(Shape::Platform { env });
 	}
-	let env = crate::environment::variables(&host.volumes.root(name))?;
+	let mut env = crate::environment::variables(&host.volumes.root(name))?;
+	// Every app is told which node it runs on, whatever its own files say. See
+	// spec/architecture/host.md, "An app's environment is two files, and the panel shows one".
+	bound(&mut env, vec![format!("NODE={}", host.config.node)]);
 	let sockets = || {
 		Ok(
 			crate::cron::socket_services(&host.store.apps()?)
