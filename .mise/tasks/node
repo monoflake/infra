@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+#MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`"
+"""Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
+/data, and the firewall. Run again it changes nothing. See spec/architecture/nodes.md."""
+
+import base64
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+NODES = ROOT / "nodes"
+# How long a firewall that locked the session out stays before the machine takes it down itself.
+GUARD_SECONDS = 60
+
+# Each file the node needs, by family: where it comes from in nodes/ and where it goes.
+FILES = {
+	"debian": [
+		("debian/node-firewall.service", "/etc/systemd/system/node-firewall.service", "644"),
+		("debian/docker-data.conf", "/etc/systemd/system/docker.service.d/data.conf", "644"),
+	],
+	"alpine": [
+		("alpine/node-firewall", "/etc/init.d/node-firewall", "755"),
+		("alpine/data-mount", "/etc/init.d/data-mount", "755"),
+	],
+}
+
+# What only one family does: naming the machine, its zone, and starting what boots the firewall.
+SETUP = {
+	"debian": """
+hostnamectl set-hostname "$name"
+if [ -d /etc/cloud/cloud.cfg.d ]; then
+	printf '%s' "$cloud_hostname" | base64 -d > /etc/cloud/cloud.cfg.d/99-node-hostname.cfg
+fi
+timedatectl set-timezone UTC
+systemctl daemon-reload
+systemctl enable --quiet node-firewall
+""",
+	"alpine": """
+echo "$name" > /etc/hostname
+hostname "$name"
+ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+echo UTC > /etc/timezone
+command -v nft >/dev/null || apk add --quiet nftables
+grep -q '^rc_need="data-mount"' /etc/conf.d/docker || echo 'rc_need="data-mount"' >> /etc/conf.d/docker
+rc-update add data-mount default >/dev/null
+rc-update add node-firewall boot >/dev/null
+""",
+}
+
+START = {
+	"debian": "systemctl restart node-firewall",
+	"alpine": "rc-service --quiet node-firewall restart",
+}
+
+
+def firewall(node):
+	trusted = ["lo", "tailscale0", "docker0"] + ([node["lan"]] if "lan" in node else [])
+	text = (NODES / "firewall.nft").read_text()
+	return text.replace("@TRUSTED@", ", ".join(f'"{name}"' for name in trusted))
+
+
+def encoded(text):
+	return base64.b64encode(text.encode()).decode()
+
+
+def script(name, node):
+	"""The whole of what runs on the machine, as one shell script."""
+	family = node["system"]
+	lines = [
+		"set -eu",
+		f"name={name}",
+		f"cloud_hostname={encoded((NODES / 'debian/cloud-hostname.cfg').read_text())}",
+		# A node declared one family and running another stops here, before anything is written.
+		f'. /etc/os-release; case "$ID $ID_LIKE" in *{family}*) ;; *) echo "not {family}: $ID" >&2; exit 1;; esac',
+		"old=$(hostname)",
+		"mkdir -p /etc/node",
+		f"printf '%s' {encoded(firewall(node))} | base64 -d > /etc/node/firewall.nft",
+	]
+	for source, target, mode in FILES[family]:
+		lines.append(f"mkdir -p {Path(target).parent}")
+		lines.append(f"printf '%s' {encoded((NODES / source).read_text())} | base64 -d > {target}")
+		lines.append(f"chmod {mode} {target}")
+	lines.append(SETUP[family])
+	# The old name is replaced where /etc/hosts gives it, so the machine still resolves itself.
+	lines.append(
+		"""awk -v o="$old" -v n="$name" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == o) $i = n } { print }' """
+		"""/etc/hosts > /etc/hosts.node && cat /etc/hosts.node > /etc/hosts && rm /etc/hosts.node"""
+	)
+	lines.append('tailscale set --hostname="$name"')
+	lines.append("nft -c -f /etc/node/firewall.nft")
+	# Applied under a guard: unless a second session proves the machine is still reachable, the
+	# table comes down by itself. See spec/architecture/nodes.md.
+	lines.append("rm -f /run/node-firewall.ok")
+	lines.append(START[family])
+	lines.append(
+		f"setsid sh -c 'sleep {GUARD_SECONDS}; [ -f /run/node-firewall.ok ] || nft delete table inet node' "
+		"</dev/null >/dev/null 2>&1 &"
+	)
+	return "\n".join(lines) + "\n"
+
+
+def ssh(address, command, stdin=None):
+	return subprocess.run(
+		["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", f"root@{address}", command],
+		input=stdin,
+		text=True,
+	).returncode
+
+
+def main():
+	arguments = sys.argv[1:]
+	dry = "--dry-run" in arguments or "-n" in arguments
+	address = arguments[arguments.index("--address") + 1] if "--address" in arguments else None
+	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	names = [a for a in arguments if not a.startswith("-") and a != address]
+	if "--all" in arguments:
+		names = list(nodes)
+	if not names or any(name not in nodes for name in names) or (address and len(names) > 1):
+		sys.exit(f"node: name one of {', '.join(nodes)} or --all; --address takes one")
+
+	failed = []
+	for name in names:
+		node = nodes[name]
+		where = address or name
+		if dry:
+			print(f"# node {name}, {node['system']}, at root@{where}\n{script(name, node)}")
+			continue
+		print(f"node: {name} at root@{where}")
+		if ssh(where, "sh -s", script(name, node)) != 0:
+			failed.append(name)
+			continue
+		# A new session, over the tailnet, is what the firewall has to let through.
+		if ssh(where, "touch /run/node-firewall.ok") != 0:
+			print(f"node: {name} refused a second session; its firewall comes down in {GUARD_SECONDS}s")
+			failed.append(name)
+			continue
+		print(f"node: {name} is set up")
+	if failed:
+		sys.exit(f"node: failed on {', '.join(failed)}")
+
+
+if __name__ == "__main__":
+	main()

@@ -1,0 +1,16 @@
+# Loads nodes/firewall.nft at boot. Not Debian's nftables.service, whose stop flushes the whole
+# ruleset, Docker's and Tailscale's with it.
+[Unit]
+Description=The node's firewall
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/node/firewall.nft
+ExecStop=/usr/sbin/nft delete table inet node
+
+[Install]
+WantedBy=multi-user.target

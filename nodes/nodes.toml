@@ -1,0 +1,45 @@
+# Every node, and what a person decides about it; the axes are spec/architecture/nodes.md.
+# `system` is the family the node's setup is written for. `lan` names an interface whose network is
+# trusted like the tailnet, for the one node in the house.
+
+[tyo]
+tier = "datacenter"
+domain = "oci"
+expiry = 2036
+system = "debian"
+
+[nrt]
+tier = "datacenter"
+domain = "oci"
+expiry = 2036
+system = "alpine"
+
+[hnd]
+tier = "datacenter"
+domain = "oci"
+expiry = 2036
+system = "alpine"
+
+[gvx]
+tier = "datacenter"
+domain = "azure"
+expiry = 2030
+system = "debian"
+
+[bru]
+tier = "datacenter"
+domain = "azure"
+expiry = 2030
+system = "debian"
+
+[buf]
+tier = "datacenter"
+domain = "racknerd"
+expiry = 2027
+system = "debian"
+
+[rdu]
+tier = "home"
+domain = "home"
+system = "debian"
+lan = "end0"

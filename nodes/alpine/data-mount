@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# No /data, no Docker: see spec/architecture/host.md, "The control plane going down is not an
+# outage".
+description="Succeeds only when /data is mounted"
+
+depend() {
+	need localmount
+	before docker
+}
+
+start() {
+	ebegin "Checking that /data is mounted"
+	mountpoint -q /data
+	eend $? "/data is not mounted"
+}

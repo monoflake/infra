@@ -1,0 +1,30 @@
+#!/usr/sbin/nft -f
+# The node's own table, beside Docker's and Tailscale's, which it never touches: nothing comes in
+# but over the tailnet. See spec/architecture/nodes.md, "Nothing comes in but over the tailnet".
+# `mise run node` fills in the trusted set from nodes.toml.
+
+table inet node
+delete table inet node
+
+table inet node {
+	set trusted {
+		type ifname
+		elements = { @TRUSTED@ }
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+		ct state vmap { established : accept, related : accept, invalid : drop }
+		iifname @trusted accept
+		iifname "br-*" accept
+		meta l4proto { icmp, ipv6-icmp } accept
+		udp dport 41641 accept
+		udp sport 67 udp dport 68 accept
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy accept;
+		ct state new ct status dnat iifname != @trusted iifname != "br-*" drop
+	}
+}

@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# Loads nodes/firewall.nft at boot; Docker's init script already waits for a `firewall`.
+description="The node's firewall"
+
+depend() {
+	provide firewall
+	before net
+}
+
+start() {
+	ebegin "Loading the node's firewall"
+	nft -f /etc/node/firewall.nft
+	eend $?
+}
+
+stop() {
+	ebegin "Unloading the node's firewall"
+	nft delete table inet node
+	eend $?
+}

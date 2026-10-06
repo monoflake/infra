@@ -29,6 +29,12 @@ chooses a container's shape by the app's name and keeps its data under `/data/ap
 an image and a container are named for the app, so moving an app between groups changes nothing on
 the node. The tools find an app by `apps/*/<name>`.
 
+## `nodes/` is the machines
+
+What a node is declared to be, `nodes.toml`, and the files `mise run node` puts on the machine
+itself -- the firewall, the units that load it and that hold Docker until `/data` is mounted -- one
+directory per family of system. See [architecture/nodes.md](architecture/nodes.md).
+
 ## The other repositories are named, never linked
 
 The platform is `monoflake/platform` and the site `canmi21/web`, each cloned beside this one in the

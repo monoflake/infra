@@ -49,18 +49,50 @@ replicas by the same rule in another failure domain. Whichever node satisfies th
 platform, and today that is `tyo`. Small `datacenter` nodes run what keeps nothing; `home` holds what
 only the author reads and what needs its disk.
 
+## Nothing comes in but over the tailnet
+
+**A node opens no inbound port to the public.** Public traffic reaches it through its own tunnel,
+which it dials out -- platform's `spec/architecture/services.md`, "Every node is the same node" --
+so whether a machine has a public IPv4, an IPv6, or neither changes nothing about how it is reached.
+The provider's firewall and the node's own both refuse whatever arrives unasked; ssh is reached over
+the tailnet, and a provider's console is the way back in when the tailnet is not.
+
+**The node's own firewall is a table of its own, `inet node`, beside Docker's and Tailscale's and
+never touching them** -- [`nodes/firewall.nft`](../../nodes/firewall.nft):
+
+- **In**: what answers a connection the node made, the loopback, the tailnet and Docker's bridges,
+  ICMP of both versions -- IPv6 dies without neighbor discovery -- Tailscale's own UDP port for direct
+  paths, and the DHCP replies an address is leased by. Everything else is dropped.
+- **Through**: a new connection that Docker translated to a container is dropped unless it came in
+  over a trusted interface. Docker publishes a port by rewriting it before the input chain ever sees
+  it, so a firewall on input alone would leave every published port open; this rule closes them to
+  the public whatever a container publishes.
+- **Trusted** is the loopback, the tailnet, Docker's bridges and, for the node in the house, its LAN
+  -- `lan` in `nodes.toml`, since the house's devices reach it there.
+
+Rejected: **Docker's `iptables: false`**, which leaves containers without the address translation
+they reach the network through, and **Debian's `nftables.service`**, whose stop flushes the whole
+ruleset, Docker's and Tailscale's with it; the node loads its table with a unit of its own.
+
+## A node is set up by one task, run again at will
+
+**`mise run node <name>` brings a machine to what [`nodes/`](../../nodes/) holds for it**, and run
+again changes nothing: its name as hostname and on the tailnet, UTC, the files that make Docker wait
+for `/data` -- [host.md](host.md), "The control plane going down is not an outage" -- and the
+firewall, each written once for Debian and once for Alpine. cloud-init is told to keep the hostname,
+or it would put the provider's back at every boot. The first run names the machine by `--address`,
+since it is not yet called by its name.
+
+**The firewall goes up under a guard.** Unless a second ssh session, opened after it, proves the
+machine is still reachable, the machine takes the table down by itself a minute later, so a rule that
+locks the session out undoes itself.
+
 ## The nodes
 
-| Node  | Tier         | Failure domain | Expiry |
-| ----- | ------------ | -------------- | ------ |
-| `tyo` | `datacenter` | `oci`          | 2036   |
-| `nrt` | `datacenter` | `oci`          | 2036   |
-| `hnd` | `datacenter` | `oci`          | 2036   |
-| `gvx` | `datacenter` | `azure`        | 2030   |
-| `bru` | `datacenter` | `azure`        | 2030   |
-| `buf` | `datacenter` | `racknerd`     | 2027   |
-| `rdu` | `home`       | `home`         | --     |
+What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml), and nowhere else.
 
 **`gvx` and `bru` have no public IPv4**, inbound or, from late 2026, outbound. What only IPv4 reaches
--- GitHub's API, from which host takes every build, and `ghcr.io` -- reaches them through a node that
-has it, over the tailnet, which runs on IPv6 -- see [../issues.md](../issues.md).
+-- GitHub's API, from which host takes every build, and `ghcr.io` -- reaches them through a proxy on
+a node that has it, over the tailnet, which runs on IPv6: an app of the platform's, set as
+`HTTPS_PROXY` for host and dockerd alone. Rejected: a tailnet exit node, which needs no code but
+carries all of their traffic.
