@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-#MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`"
+#MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, or start its first host: `node host <name> [--run RUN_ID] [--dry-run]`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
-/data, and the firewall. Run again it changes nothing. See spec/architecture/nodes.md."""
+/data, and the firewall. Run again it changes nothing. See spec/architecture/nodes.md.
+
+`node host <name>` starts the first host on a node set up that way and hands it a CI run, from
+which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
+into it"."""
 
 import base64
+import json
+import os
+import secrets
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -53,6 +63,77 @@ START = {
 	"debian": "systemctl restart node-firewall",
 	"alpine": "rc-service --quiet node-firewall restart",
 }
+
+# What host on a cloud node is told; each key is read in apps/deploy/host/src/config.rs.
+PRIVATE_SUFFIX = "internal.ixc.one"
+PUBLIC_SUFFIX = "canmi.app"
+# The tailnet, the machine itself and Docker's bridges.
+PRIVATE_SOURCES = "100.64.0.0/10,127.0.0.0/8,172.16.0.0/12"
+# The tunnel's fixed address on `edge`, inside EDGE_SUBNET.
+TUNNEL_SOURCE = "172.30.0.20"
+EDGE_SUBNET = "172.30.0.0/24"
+DEPLOY_SOURCES = "monoflake/infra monoflake/platform"
+# The repository and workflow host's own image is built by.
+REPOSITORY = "monoflake/infra"
+WORKFLOW = "deploy.yml"
+# host's PORT in apps/deploy/host/src/config.rs. It publishes none, so is reached on its network.
+HOST_PORT = 11011
+CURL = "curlimages/curl:8.11.1"
+# How long the host container gets to be running after `docker compose up`.
+WAIT_SECONDS = 60
+# The secrets host and Caddy are given, read from the environment mise loads secrets.json into.
+SECRETS = ("ACME_EMAIL", "GITHUB_ACTIONS_TOKEN", "INTERNAL_TOKEN")
+# `uname -m` as an artifact name spells it.
+ARCHES = {"aarch64": "arm64", "x86_64": "amd64"}
+COMPOSE = ROOT / "apps/deploy/host/docker-compose.yml"
+
+# Runs on the node before host starts: `edge` at the subnet the tunnel's address is in, and the
+# subvolumes host and Caddy live in, since host snapshots each app's.
+PREPARE = rf"""set -eu
+mountpoint -q /data || {{ echo "/data is not mounted" >&2; exit 1; }}
+subnet=$(docker network inspect edge \
+	--format '{{{{range .IPAM.Config}}}}{{{{.Subnet}}}}{{{{end}}}}' 2>/dev/null || true)
+if [ -z "$subnet" ]; then
+	docker network create --subnet {EDGE_SUBNET} edge >/dev/null
+	echo "edge: created at {EDGE_SUBNET}"
+elif [ "$subnet" != {EDGE_SUBNET} ]; then
+	echo "edge is at $subnet, not {EDGE_SUBNET}; remove it or move it by hand" >&2
+	exit 1
+fi
+mkdir -p /data/apps
+for app in host caddy; do
+	[ -d /data/apps/$app ] || btrfs subvolume create /data/apps/$app >/dev/null
+done
+chmod 700 /data/apps/caddy
+"""
+
+# Runs on the node with INTERNAL_TOKEN on stdin, keeping whatever else Caddy's secret.env holds.
+CADDY_SECRET = r"""set -eu
+file=/data/apps/caddy/secret.env
+read -r token
+want="INTERNAL_TOKEN=$token"
+if [ -f "$file" ] && grep -qxF -- "$want" "$file"; then
+	echo current
+	exit 0
+fi
+umask 077
+{
+	if [ -f "$file" ]; then grep -v '^INTERNAL_TOKEN=' "$file" || true; fi
+	printf '%s\n' "$want"
+} > "$file.new"
+chown root:root "$file.new"
+chmod 600 "$file.new"
+mv "$file.new" "$file"
+echo written
+"""
+
+WAIT = rf"""i=0
+until [ "$(docker inspect -f '{{{{.State.Running}}}}' host 2>/dev/null)" = true ]; do
+	i=$((i + 1))
+	[ "$i" -lt {WAIT_SECONDS} ] || exit 1
+	sleep 1
+done
+"""
 
 
 def firewall(node):
@@ -109,8 +190,182 @@ def ssh(address, command, stdin=None):
 	).returncode
 
 
+def ssh_output(address, command, stdin=None):
+	"""What the command printed, or None when it failed; its errors go to the terminal."""
+	result = subprocess.run(
+		["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", f"root@{address}", command],
+		input=stdin,
+		text=True,
+		stdout=subprocess.PIPE,
+	)
+	return result.stdout.strip() if result.returncode == 0 else None
+
+
+def put(address, path, content, mode):
+	"""Writes a file on the node from stdin, so what it holds is never on a command line."""
+	command = f"umask 077; cat > {path}.new && chmod {mode} {path}.new && mv {path}.new {path}"
+	return ssh(address, f"sh -c {shlex.quote(command)}", content) == 0
+
+
+def gh(*arguments):
+	result = subprocess.run(["gh", *arguments], text=True, stdout=subprocess.PIPE)
+	if result.returncode != 0:
+		sys.exit(f"node: gh {arguments[0]} failed")
+	return json.loads(result.stdout)
+
+
+def newest_run(arch):
+	"""The newest successful run of the deploy workflow on main that built host for `arch`."""
+	wanted = f"deploy-host-{arch}"
+	runs = gh("run", "list", "-R", REPOSITORY, "-w", WORKFLOW, "-b", "main", "-s", "success",
+		"-L", "50", "--json", "databaseId")
+	for run in runs:
+		found = gh("api", f"repos/{REPOSITORY}/actions/runs/{run['databaseId']}/artifacts?per_page=100")
+		if any(a["name"] == wanted and not a["expired"] for a in found["artifacts"]):
+			return run["databaseId"]
+	return None
+
+
+def host_token(name, dry):
+	"""HOST_TOKEN_<NAME> from secrets.json, made and stored there first when it is not."""
+	key = f"HOST_TOKEN_{name.upper()}"
+	if os.environ.get(key):
+		print(f"node: {key} is read from secrets.json")
+		return os.environ[key]
+	if dry:
+		print(f"node: {key} is not in secrets.json; 32 random bytes would be stored there as it")
+		return None
+	token = secrets.token_hex(32)
+	stored = subprocess.run(
+		["sops", "set", "--value-stdin", "secrets.json", json.dumps([key])],
+		input=json.dumps(token),
+		text=True,
+		cwd=ROOT,
+	)
+	if stored.returncode != 0:
+		sys.exit(f"node: storing {key} in secrets.json failed")
+	print(f"node: {key} was made and stored in secrets.json")
+	return token
+
+
+def environment(name, token):
+	"""host's `.env`. LAN_ADDRESS, RESOLVER_UPSTREAMS and GRANTS are left out: a cloud node has no
+	LAN, runs no resolver, and grants nothing."""
+	values = {
+		"NODE": name,
+		"HOST_TOKEN": token,
+		"PRIVATE_SUFFIX": PRIVATE_SUFFIX,
+		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
+		"PRIVATE_SOURCES": PRIVATE_SOURCES,
+		"TUNNEL_SOURCE": TUNNEL_SOURCE,
+		"ACME_EMAIL": os.environ["ACME_EMAIL"],
+		"GITHUB_ACTIONS_TOKEN": os.environ["GITHUB_ACTIONS_TOKEN"],
+		"DEPLOY_SOURCES": DEPLOY_SOURCES,
+	}
+	return "".join(f"{key}={value}\n" for key, value in values.items())
+
+
+def start_host(name, run, dry):
+	"""Brings up the first host on a fresh node and hands it a run; keeper replaces it after that."""
+	missing = [key for key in SECRETS if not os.environ.get(key)]
+	if missing:
+		sys.exit(f"node: {', '.join(missing)} not in the environment; they come from secrets.json")
+	machine = ssh_output(name, "uname -m")
+	if machine is None:
+		sys.exit(f"node: root@{name} did not answer")
+	if machine not in ARCHES:
+		sys.exit(f"node: {name} is {machine}, for which nothing is built")
+	arch = ARCHES[machine]
+	artifact = f"deploy-host-{arch}"
+	run = run or newest_run(arch)
+	if run is None:
+		message = f"no successful {WORKFLOW} run on main has an unexpired {artifact}"
+		if not dry:
+			sys.exit(f"node: {message}; name one with --run")
+		print(f"node: {message}")
+		run = "RUN_ID"
+	print(f"node: host on {name}, {arch}, from run {run} of {REPOSITORY}")
+	token = host_token(name, dry)
+	notice = json.dumps({"run": run, "repository": REPOSITORY, "host_replaced": True})
+	if dry:
+		print(
+			f"node: would, on root@{name}:\n"
+			f"  check /data is mounted; make `edge` at {EDGE_SUBNET} unless it is there\n"
+			"  make the subvolumes /data/apps/host and /data/apps/caddy unless they are there\n"
+			"  write /data/apps/caddy/secret.env, mode 600: INTERNAL_TOKEN from secrets.json\n"
+			f"  load {artifact} from run {run}, downloaded here by gh, as host:local\n"
+			f"  write /data/apps/host/docker-compose.yml from {COMPOSE.relative_to(ROOT)}\n"
+			f"  write /data/apps/host/.env, mode 600: NODE={name} PRIVATE_SUFFIX={PRIVATE_SUFFIX}\n"
+			f"    PUBLIC_SUFFIX={PUBLIC_SUFFIX} PRIVATE_SOURCES={PRIVATE_SOURCES}\n"
+			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
+			f"    and HOST_TOKEN_{name.upper()} as HOST_TOKEN, ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
+			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
+			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
+		)
+		return
+
+	if ssh(name, "sh -s", PREPARE) != 0:
+		sys.exit(f"node: preparing {name} failed")
+	secret = os.environ["INTERNAL_TOKEN"] + "\n"
+	state = ssh_output(name, f"sh -c {shlex.quote(CADDY_SECRET)}", secret)
+	if state is None:
+		sys.exit(f"node: writing Caddy's secret.env on {name} failed")
+	print(f"node: Caddy's secret.env {'written' if state == 'written' else 'already current'}")
+
+	scratch = tempfile.mkdtemp(prefix="node-host-")
+	try:
+		fetched = subprocess.run(
+			["gh", "run", "download", str(run), "-R", REPOSITORY, "-n", artifact, "-D", scratch]
+		)
+		if fetched.returncode != 0:
+			sys.exit(f"node: downloading {artifact} from run {run} failed")
+		with open(Path(scratch) / "image.tar", "rb") as image:
+			loaded = subprocess.run(
+				["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", f"root@{name}", "docker load"],
+				stdin=image,
+			)
+		if loaded.returncode != 0:
+			sys.exit(f"node: loading host's image on {name} failed")
+	finally:
+		shutil.rmtree(scratch, ignore_errors=True)
+
+	if not put(name, "/data/apps/host/docker-compose.yml", COMPOSE.read_text(), "644"):
+		sys.exit(f"node: writing host's docker-compose.yml on {name} failed")
+	if not put(name, "/data/apps/host/.env", environment(name, token), "600"):
+		sys.exit(f"node: writing host's .env on {name} failed")
+	if ssh(name, "cd /data/apps/host && docker compose up -d") != 0:
+		sys.exit(f"node: starting host on {name} failed")
+	if ssh(name, "sh -s", WAIT) != 0:
+		sys.exit(f"node: host on {name} is not running after {WAIT_SECONDS}s")
+
+	networks = "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}"
+	network = ssh_output(name, f"docker inspect host -f '{networks}'")
+	if not network:
+		sys.exit(f"node: host on {name} is on no network")
+	# host_replaced: a run that rebuilt host otherwise waits for keeper, which a fresh node lacks.
+	post = [
+		"docker", "run", "--rm", "--network", network.split()[0], CURL,
+		"-sS", "--retry", "10", "--retry-connrefused", "--retry-delay", "1",
+		"-X", "POST", "-H", "content-type: application/json", "--data", notice,
+		f"http://host:{HOST_PORT}/notice",
+	]
+	answer = ssh_output(name, shlex.join(post))
+	if answer is None:
+		sys.exit(f"node: host on {name} did not take run {run}")
+	print(f"node: host on {name} answered {answer}")
+
+
 def main():
 	arguments = sys.argv[1:]
+	if arguments[:1] == ["host"]:
+		rest = arguments[1:]
+		run = rest[rest.index("--run") + 1] if "--run" in rest else None
+		names = [a for a in rest if not a.startswith("-") and a != run]
+		nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+		if len(names) != 1 or names[0] not in nodes or (run is not None and not run.isdigit()):
+			sys.exit(f"node: host takes one of {', '.join(nodes)}, and --run a run's number")
+		start_host(names[0], int(run) if run else None, "--dry-run" in rest or "-n" in rest)
+		return
 	dry = "--dry-run" in arguments or "-n" in arguments
 	address = arguments[arguments.index("--address") + 1] if "--address" in arguments else None
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())

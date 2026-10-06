@@ -71,7 +71,8 @@ function upload(name: string, declaration: string, archive: string, token: strin
 }
 
 function deploy(name: string): void {
-	const token = process.env.HOST_TOKEN ?? fail('HOST_TOKEN is not set; it comes from secrets.json');
+	const token =
+		process.env.HOST_TOKEN_RDU ?? fail('HOST_TOKEN_RDU is not set; it comes from secrets.json');
 	const declaration = join(appDirectory(name), 'service.toml');
 	if (!existsSync(declaration)) fail(`${name} has no service.toml`);
 	const scratch = mkdtempSync(join(tmpdir(), 'host-'));

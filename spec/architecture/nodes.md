@@ -90,6 +90,23 @@ asks for, so a node renamed there keeps its old tailnet name until the console s
 machine is still reachable, the machine takes the table down by itself a minute later, so a rule that
 locks the session out undoes itself.
 
+## A cloud node is brought up by two more tasks
+
+**`mise run tunnel <name>` wires the node into Cloudflare, and `mise run node host <name>` starts its
+first host.** The first gives the node a tunnel and a Workers VPC service of its own name, the VPC
+service reaching Caddy through that tunnel as `rdu`'s does, and puts the tunnel's token on the node.
+The second loads host's image from the newest CI run, starts it from its compose file with the
+node's `.env`, and hands it that run, so host deploys the rest. It hands the run as one keeper has
+already passed on: a run that rebuilt host makes host wait for keeper, and a fresh node has none
+until host deploys it.
+
+**What every node runs is host, keeper, Caddy, the tunnel and the meter.** The panel and the
+resolver answer the house's LAN and stay on the node that has one.
+
+**Each node's host has a token of its own**, `HOST_TOKEN_<NAME>` in the repository's secrets, made
+the first time the node is brought up: the token is root on its machine, so one leaked stays one
+machine. The token GitHub's Actions are read with is shared, since it can only read what CI built.
+
 ## The nodes
 
 What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml), and nowhere else.

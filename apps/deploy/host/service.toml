@@ -2,7 +2,7 @@
 # own names are rendered by host itself; see spec/architecture/host.md.
 version = 1
 name = "host"
-placements = ["rdu"]
+placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 [container]
 # After the machine's address ending in .11.

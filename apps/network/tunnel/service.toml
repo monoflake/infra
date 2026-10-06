@@ -2,7 +2,7 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "tunnel"
-placements = ["rdu"]
+placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 # Its routes live in Cloudflare's dashboard, and its token in its `secret.env` on the node. host
 # asks its metrics server whether it holds a connection to Cloudflare.

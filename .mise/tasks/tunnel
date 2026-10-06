@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+#MISE description="Give a node its own tunnel and VPC service: `tunnel <name>|--all [--dry-run]`"
+"""Gives each node a Cloudflare Tunnel and a Workers VPC service of its own, both named for the
+node, and puts the tunnel's connector token on the node. Run again it changes nothing. Prints the
+VPC service ids as JSON. See spec/architecture/nodes.md."""
+
+import json
+import os
+import subprocess
+import sys
+import tomllib
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+NODES = ROOT / "nodes"
+ACCOUNT = "62163885eb1943e6561e004ac10a5f22"
+API = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}"
+# Wired by hand under other names (nanopi, home), so this task leaves it alone.
+WIRED = {"rdu"}
+
+# Runs on the node with the token on stdin. A btrfs subvolume, since host snapshots each app's.
+REMOTE = r"""set -eu
+dir=/data/apps/tunnel
+file=$dir/secret.env
+[ -d "$dir" ] || btrfs subvolume create "$dir" >/dev/null
+chmod 700 "$dir"
+read -r token
+want="TUNNEL_TOKEN=$token"
+if [ -f "$file" ] && grep -qxF -- "$want" "$file"; then
+	echo current
+	exit 0
+fi
+umask 077
+{
+	if [ -f "$file" ]; then grep -v '^TUNNEL_TOKEN=' "$file" || true; fi
+	printf '%s\n' "$want"
+} > "$file.new"
+chown root:root "$file.new"
+chmod 600 "$file.new"
+mv "$file.new" "$file"
+echo written
+"""
+
+
+def call(method, path, body=None):
+	"""One call to the API, as the envelope's result; a failure stops here with its errors."""
+	request = urllib.request.Request(
+		f"{API}/{path}",
+		method=method,
+		data=None if body is None else json.dumps(body).encode(),
+		headers={
+			"Authorization": f"Bearer {os.environ['CLOUDFLARE_NODES_TOKEN']}",
+			"Content-Type": "application/json",
+		},
+	)
+	try:
+		with urllib.request.urlopen(request, timeout=30) as response:
+			envelope = json.load(response)
+	except urllib.error.HTTPError as error:
+		try:
+			envelope = json.load(error)
+		except ValueError:
+			sys.exit(f"tunnel: {method} {path}: HTTP {error.code}")
+	if not envelope.get("success"):
+		sys.exit(f"tunnel: {method} {path} failed: {json.dumps(envelope.get('errors'))}")
+	return envelope["result"]
+
+
+def find_tunnel(name):
+	found = call("GET", f"cfd_tunnel?is_deleted=false&name={name}")
+	return next((t for t in found if t["name"] == name), None)
+
+
+def find_service(name):
+	found = call("GET", "connectivity/directory/services")
+	if isinstance(found, dict):
+		found = found.get("services") or found.get("items") or []
+	return next((s for s in found if s.get("name") == name), None)
+
+
+def put_token(name, token):
+	"""The token goes over stdin only, never into the command line or the output."""
+	result = subprocess.run(
+		["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", f"root@{name}", "sh -c " + quote(REMOTE)],
+		input=token + "\n",
+		text=True,
+		capture_output=True,
+	)
+	if result.returncode != 0:
+		sys.exit(f"tunnel: {name}: writing the token failed: {result.stderr.strip()}")
+	return result.stdout.strip()
+
+
+def quote(text):
+	return "'" + text.replace("'", "'\\''") + "'"
+
+
+def wire(name, dry):
+	"""Returns the node's VPC service id, or None where a dry run has nothing to give."""
+	tunnel = find_tunnel(name)
+	created = tunnel is None
+	if created and not dry:
+		tunnel = call("POST", "cfd_tunnel", {"name": name, "config_src": "cloudflare"})
+		call(
+			"PUT",
+			f"cfd_tunnel/{tunnel['id']}/configurations",
+			{"config": {"ingress": [{"service": "http_status:404"}]}},
+		)
+	tunnel_id = tunnel["id"] if tunnel else None
+	print(f"tunnel: {name}: tunnel {name} {tunnel_id or '-'} {'would be created' if created and dry else 'created' if created else 'found'}")
+
+	service = find_service(name)
+	made = service is None
+	if made and not dry:
+		service = call(
+			"POST",
+			"connectivity/directory/services",
+			{
+				"type": "http",
+				"name": name,
+				"http_port": 80,
+				"host": {"hostname": "caddy", "resolver_network": {"tunnel_id": tunnel_id}},
+			},
+		)
+	service_id = service["service_id"] if service and "service_id" in service else (service or {}).get("id")
+	print(f"tunnel: {name}: vpc service {name} {service_id or '-'} {'would be created' if made and dry else 'created' if made else 'found'}")
+
+	if dry:
+		print(f"tunnel: {name}: would write TUNNEL_TOKEN to /data/apps/tunnel/secret.env if it differs")
+	else:
+		state = put_token(name, call("GET", f"cfd_tunnel/{tunnel_id}/token"))
+		print(f"tunnel: {name}: token {'written' if state == 'written' else 'already current'}")
+	return service_id
+
+
+def main():
+	arguments = sys.argv[1:]
+	dry = "--dry-run" in arguments or "-n" in arguments
+	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	names = [a for a in arguments if not a.startswith("-")]
+	if "--all" in arguments:
+		names = list(nodes)
+	if not names or any(name not in nodes for name in names):
+		sys.exit(f"tunnel: name one of {', '.join(nodes)} or --all")
+	if "CLOUDFLARE_NODES_TOKEN" not in os.environ:
+		sys.exit("tunnel: CLOUDFLARE_NODES_TOKEN is not set")
+
+	ids = {}
+	for name in names:
+		if name in WIRED:
+			print(f"tunnel: {name} is wired already")
+			continue
+		ids[name] = wire(name, dry)
+	print(json.dumps(ids, indent=2))
+
+
+if __name__ == "__main__":
+	main()

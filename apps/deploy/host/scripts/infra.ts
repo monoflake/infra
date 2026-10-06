@@ -263,7 +263,8 @@ function parse(argv: string[]): { what: What; app?: string; path?: string; json:
 }
 
 function main(): void {
-	const token = process.env.HOST_TOKEN ?? fail('HOST_TOKEN is not set; it comes from secrets.json');
+	const token =
+		process.env.HOST_TOKEN_RDU ?? fail('HOST_TOKEN_RDU is not set; it comes from secrets.json');
 	const { what, app, path, json } = parse(process.argv.slice(2));
 	const envelope = fetchEnvelope(route(what, app, path), token);
 	if (envelope.status === 'error') {
