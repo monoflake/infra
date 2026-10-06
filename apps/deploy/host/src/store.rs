@@ -80,6 +80,21 @@ pub enum Outcome {
 	Skipped,
 }
 
+/// How far a deploy has come and, once it has ended, the last step it reached: a failure names
+/// where it failed by this and the outcome together. An act on a container as it is has none.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+	/// Fetching a CI run's artifact and checking it against the digest GitHub recorded.
+	Downloading,
+	/// Reading the declaration and taking it or passing it over: placed here, not held, runnable.
+	Admitting,
+	/// Loading the archive into Docker.
+	Loading,
+	/// Replacing what runs, through the new version's health check.
+	Starting,
+}
+
 /// What started an event: a CI run, an upload, or the panel.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct Source {
@@ -118,6 +133,8 @@ pub struct Event {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub snapshot: Option<String>,
 	pub outcome: Outcome,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub stage: Option<Stage>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub detail: Option<String>,
 	pub started_at: String,
@@ -166,9 +183,24 @@ const HISTORY: &str = "CREATE TABLE IF NOT EXISTS events (
 	outcome TEXT NOT NULL,
 	detail TEXT,
 	started_at TEXT NOT NULL,
-	finished_at TEXT
+	finished_at TEXT,
+	stage TEXT
 );
 CREATE INDEX IF NOT EXISTS events_by_app ON events (app, id);";
+
+/// A `history.db` from before stages gains the column, each row reading as the step it ended at: a
+/// skip was decided while admitting, and any other deploy was recorded only once its image loaded.
+const STAGES: &str = "BEGIN;
+ALTER TABLE events ADD COLUMN stage TEXT;
+UPDATE events SET stage = CASE
+	WHEN action IN ('start', 'stop', 'restart') THEN NULL
+	WHEN outcome = 'skipped' THEN 'admitting'
+	ELSE 'starting'
+END;
+COMMIT;";
+
+/// Why an event still running when host starts is closed failed.
+pub const RESTARTED: &str = "host restarted before it finished";
 
 /// Each image nothing could run again, and since when: it is removed an hour after. See
 /// spec/architecture/host.md, "An image is kept while something could run it".
@@ -176,6 +208,16 @@ const IMAGES: &str = "CREATE TABLE IF NOT EXISTS flagged (
 	id TEXT PRIMARY KEY,
 	since TEXT NOT NULL
 );";
+
+/// The history with its `stage` column, added once to a file from before it.
+fn staged(connection: Connection) -> Result<Connection, Error> {
+	let query = "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'stage'";
+	let columns: i64 = connection.query_row(query, [], |row| row.get(0))?;
+	if columns == 0 {
+		connection.execute_batch(STAGES)?;
+	}
+	Ok(connection)
+}
 
 fn open(path: &Path, schema: &str) -> Result<Connection, Error> {
 	let connection = Connection::open(path)?;
@@ -221,7 +263,7 @@ impl Store {
 		let store = Self {
 			apps: Mutex::new(open(&directory.join("apps.db"), APPS)?),
 			routes: Mutex::new(open(&directory.join("routes.db"), ROUTES)?),
-			history: Mutex::new(open(&directory.join("history.db"), HISTORY)?),
+			history: Mutex::new(staged(open(&directory.join("history.db"), HISTORY)?)?),
 			images: Mutex::new(open(&directory.join("images.db"), IMAGES)?),
 		};
 		if split {
@@ -412,16 +454,37 @@ impl Store {
 		source: &Source,
 		image: Option<&str>,
 		outcome: Outcome,
+		stage: Option<Stage>,
 	) -> Result<i64, Error> {
 		let started = now();
 		let finished = (outcome != Outcome::Running).then(|| started.clone());
+		let stage = stage.as_ref().map(text).transpose()?;
 		let connection = lock(&self.history);
 		connection.execute(
-			"INSERT INTO events (app, action, source, image, outcome, started_at, finished_at)
-			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-			params![app, text(&action)?, text(source)?, image, text(&outcome)?, started, finished],
+			"INSERT INTO events (app, action, source, image, outcome, started_at, finished_at, stage)
+			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+			params![app, text(&action)?, text(source)?, image, text(&outcome)?, started, finished, stage],
 		)?;
 		Ok(connection.last_insert_rowid())
+	}
+
+	/// Move an open event on to `stage`, naming its image once it is known.
+	pub fn advance(&self, id: i64, stage: Stage, image: Option<&str>) -> Result<(), Error> {
+		lock(&self.history).execute(
+			"UPDATE events SET stage = ?2, image = COALESCE(?3, image) WHERE id = ?1",
+			params![id, text(&stage)?, image],
+		)?;
+		Ok(())
+	}
+
+	/// Close every event still running, which nothing is left to finish once host has restarted,
+	/// answering how many there were.
+	pub fn sweep(&self) -> Result<usize, Error> {
+		let closed = lock(&self.history).execute(
+			"UPDATE events SET outcome = ?1, detail = ?2, finished_at = ?3 WHERE outcome = ?4",
+			params![text(&Outcome::Failed)?, RESTARTED, now(), text(&Outcome::Running)?],
+		)?;
+		Ok(closed)
 	}
 
 	/// Close an event with how it ended.
@@ -450,8 +513,8 @@ impl Store {
 	) -> Result<Vec<Event>, Error> {
 		let connection = lock(&self.history);
 		let mut statement = connection.prepare(
-			"SELECT id, app, action, source, image, snapshot, outcome, detail, started_at, finished_at
-			FROM events WHERE (?1 IS NULL OR app = ?1) AND (?2 IS NULL OR id < ?2)
+			"SELECT id, app, action, source, image, snapshot, outcome, detail, started_at, finished_at,
+			stage FROM events WHERE (?1 IS NULL OR app = ?1) AND (?2 IS NULL OR id < ?2)
 			ORDER BY id DESC LIMIT ?3",
 		)?;
 		let rows = statement.query_map(params![app, before, limit], |row| {
@@ -466,12 +529,24 @@ impl Store {
 				row.get::<_, Option<String>>(7)?,
 				row.get::<_, String>(8)?,
 				row.get::<_, Option<String>>(9)?,
+				row.get::<_, Option<String>>(10)?,
 			))
 		})?;
 		rows
 			.map(|row| {
-				let (id, app, action, source, image, snapshot, outcome, detail, started_at, finished_at) =
-					row?;
+				let (
+					id,
+					app,
+					action,
+					source,
+					image,
+					snapshot,
+					outcome,
+					detail,
+					started_at,
+					finished_at,
+					stage,
+				) = row?;
 				Ok(Event {
 					id,
 					app,
@@ -480,6 +555,7 @@ impl Store {
 					image,
 					snapshot,
 					outcome: parsed(&outcome)?,
+					stage: stage.as_deref().map(parsed).transpose()?,
 					detail,
 					started_at,
 					finished_at,
@@ -663,6 +739,34 @@ mod split {
 		// Opened again, it reads the split files and leaves the set-aside one alone.
 		assert_eq!(Store::open(directory.path()).unwrap().routes().unwrap().len(), 1);
 	}
+
+	#[test]
+	fn a_history_from_before_stages_reads_each_row_as_the_step_it_ended_at() {
+		let directory = tempfile::tempdir().unwrap();
+		let old = Connection::open(directory.path().join("history.db")).unwrap();
+		old
+			.execute_batch(
+				"CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, app TEXT NOT NULL,
+				action TEXT NOT NULL, source TEXT NOT NULL, image TEXT, snapshot TEXT,
+				outcome TEXT NOT NULL, detail TEXT, started_at TEXT NOT NULL, finished_at TEXT);
+				INSERT INTO events (app, action, source, outcome, started_at) VALUES
+				('geo', 'deploy', '{\"kind\":\"run\",\"run\":7}', 'succeeded', 't'),
+				('geo', 'deploy', '{\"kind\":\"run\",\"run\":8}', 'skipped', 't'),
+				('geo', 'rollback', '{\"kind\":\"panel\"}', 'failed', 't'),
+				('geo', 'stop', '{\"kind\":\"panel\"}', 'succeeded', 't');",
+			)
+			.unwrap();
+		drop(old);
+
+		let stages = || -> Vec<Option<Stage>> {
+			let store = Store::open(directory.path()).unwrap();
+			store.events(None, None, 50).unwrap().into_iter().rev().map(|event| event.stage).collect()
+		};
+		let expected = [Some(Stage::Starting), Some(Stage::Admitting), Some(Stage::Starting), None];
+		assert_eq!(stages(), expected);
+		// Opened again, the column is there and nothing is added twice.
+		assert_eq!(stages(), expected);
+	}
 }
 
 #[cfg(test)]
@@ -675,10 +779,11 @@ mod history {
 		let store = Store::open(directory.path()).unwrap();
 		let ids: Vec<i64> = (0..5)
 			.map(|_| {
-				store.record("geo", Action::Deploy, &Source::panel(), None, Outcome::Running).unwrap()
+				let running = Outcome::Running;
+				store.record("geo", Action::Deploy, &Source::panel(), None, running, None).unwrap()
 			})
 			.collect();
-		store.record("nas", Action::Stop, &Source::panel(), None, Outcome::Succeeded).unwrap();
+		store.record("nas", Action::Stop, &Source::panel(), None, Outcome::Succeeded, None).unwrap();
 		let first = store.events(Some("geo"), None, 2).unwrap();
 		assert_eq!(first.iter().map(|event| event.id).collect::<Vec<_>>(), [ids[4], ids[3]]);
 		let next = store.events(Some("geo"), Some(ids[3]), 2).unwrap();
@@ -691,15 +796,17 @@ mod history {
 		let directory = tempfile::tempdir().unwrap();
 		let store = Store::open(directory.path()).unwrap();
 		let source = Source::run(7, Some("abc".into()));
-		let id =
-			store.record("geo", Action::Deploy, &source, Some("sha256:b"), Outcome::Running).unwrap();
+		let starting = Some(Stage::Starting);
+		let image = Some("sha256:b");
+		let id = store.record("geo", Action::Deploy, &source, image, Outcome::Running, starting);
+		let id = id.unwrap();
 		assert_eq!(store.snapshot_before("geo", "sha256:b").unwrap(), None);
 		store.finish(id, Outcome::Succeeded, Some("/snapshots/geo/1"), None).unwrap();
-		let failed = store.record("geo", Action::Deploy, &source, Some("sha256:b"), Outcome::Running);
+		let failed = store.record("geo", Action::Deploy, &source, image, Outcome::Running, starting);
 		let failed = failed.unwrap();
 		store.finish(failed, Outcome::Failed, Some("/snapshots/geo/2"), Some("unhealthy")).unwrap();
 		// A redeploy of the same image is not what first ran it.
-		let again = store.record("geo", Action::Redeploy, &source, Some("sha256:b"), Outcome::Running);
+		let again = store.record("geo", Action::Redeploy, &source, image, Outcome::Running, starting);
 		store.finish(again.unwrap(), Outcome::Succeeded, Some("/snapshots/geo/3"), None).unwrap();
 		let before = store.snapshot_before("geo", "sha256:b").unwrap();
 		assert_eq!(before.as_deref(), Some("/snapshots/geo/1"));
@@ -708,6 +815,39 @@ mod history {
 		assert_eq!((newest.outcome, newest.detail.as_deref()), (Outcome::Failed, Some("unhealthy")));
 		assert_eq!((oldest.source, oldest.outcome), (source, Outcome::Succeeded));
 		assert!(oldest.finished_at.is_some());
+	}
+
+	#[test]
+	fn a_deploy_moves_through_its_stages_and_names_its_image_once_loaded() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let source = Source::run(7, Some("abc".into()));
+		let id = store.record("geo", Action::Deploy, &source, None, Outcome::Running, None).unwrap();
+		store.advance(id, Stage::Loading, None).unwrap();
+		store.advance(id, Stage::Starting, Some("sha256:b")).unwrap();
+		let [event] = store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.stage, event.image.as_deref()), (Some(Stage::Starting), Some("sha256:b")));
+		let json = serde_json::to_value(&event).unwrap();
+		assert_eq!((&json["stage"], &json["source"]["run"]), (&"starting".into(), &7.into()));
+	}
+
+	#[test]
+	fn what_was_still_running_when_host_stopped_is_closed_failed_and_the_rest_left_alone() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let panel = Source::panel();
+		let loading = Some(Stage::Loading);
+		let cut = store.record("geo", Action::Deploy, &panel, None, Outcome::Running, loading);
+		let cut = cut.unwrap();
+		let done = store.record("geo", Action::Stop, &panel, None, Outcome::Running, None).unwrap();
+		store.finish(done, Outcome::Succeeded, None, None).unwrap();
+		assert_eq!(store.sweep().unwrap(), 1);
+		assert_eq!(store.sweep().unwrap(), 0);
+		let [stop, deploy] = store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((deploy.id, deploy.outcome, deploy.stage), (cut, Outcome::Failed, loading));
+		assert_eq!(deploy.detail.as_deref(), Some(RESTARTED));
+		assert!(deploy.finished_at.is_some());
+		assert_eq!((stop.outcome, stop.detail), (Outcome::Succeeded, None));
 	}
 
 	#[test]

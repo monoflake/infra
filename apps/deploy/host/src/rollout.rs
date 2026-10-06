@@ -4,7 +4,7 @@
 
 use crate::grants::Role;
 use crate::sidecars::{self, drive};
-use crate::store::{Action, Deployed, Source};
+use crate::store::{Action, Deployed, Source, Stage};
 use crate::{Host, caddy, store};
 use deploy::manifest::{Invalid, Manifest};
 use deploy::replace::{self, Beside, replace_beside};
@@ -280,6 +280,32 @@ fn close<T>(host: &Host, id: i64, result: &Result<(T, Option<PathBuf>), Error>) 
 	}
 }
 
+/// Run `step` as event `id`'s `stage`: moved on to it first, and closed failed at it if it fails.
+/// A record that cannot be written is logged rather than failing the deploy, as `close` does.
+async fn staged<T, E: std::fmt::Display>(
+	store: &store::Store,
+	id: i64,
+	stage: Stage,
+	step: impl Future<Output = Result<T, E>>,
+) -> Result<T, E> {
+	if let Err(error) = store.advance(id, stage, None) {
+		eprintln!("host: recording event {id}: {error}");
+	}
+	step.await.inspect_err(|error| {
+		let detail = error.to_string();
+		if let Err(error) = store.finish(id, store::Outcome::Failed, None, Some(&detail)) {
+			eprintln!("host: recording event {id}: {error}");
+		}
+	})
+}
+
+/// Close event `id` as passed over, saying why.
+fn skip(host: &Host, id: i64, why: &str) {
+	if let Err(error) = host.store.finish(id, store::Outcome::Skipped, None, Some(why)) {
+		eprintln!("host: recording event {id}: {error}");
+	}
+}
+
 /// Caddy follows the state, and images no version needs go.
 async fn settle(host: &Arc<Host>, name: String, image: String) -> Result<Outcome, Error> {
 	let routed = route(host).await.map_err(|error| error.to_string());
@@ -381,16 +407,18 @@ fn redeploy_cron(
 	})
 }
 
-/// Deploy a new version, as an upload or a CI run brings one. Explicit, so it ends a hold.
-pub async fn deploy(
+/// Deploy a new version, as an upload or a CI run brings one, into event `id`, which it closes.
+/// Explicit, so it ends a hold.
+async fn deploy(
 	host: &Arc<Host>,
+	id: i64,
 	manifest: Manifest,
 	image: String,
-	source: &Source,
 ) -> Result<Outcome, Error> {
 	let name = manifest.name.clone();
-	let id =
-		host.store.record(&name, Action::Deploy, source, Some(&image), store::Outcome::Running)?;
+	if let Err(error) = host.store.advance(id, Stage::Starting, Some(&image)) {
+		eprintln!("host: recording event {id}: {error}");
+	}
 	let result = async {
 		let current = host
 			.store
@@ -414,8 +442,8 @@ pub async fn deploy(
 	settle(host, name, image).await
 }
 
-/// Load an image archive and deploy it, as an upload or a notice brings one. The archive is gone
-/// afterwards whatever happened, so a refused one does not wait on disk for the next.
+/// Load an image archive and deploy it, as an upload brings one. The archive is gone afterwards
+/// whatever happened, so a refused one does not wait on disk for the next.
 pub async fn from_archive(
 	host: &Arc<Host>,
 	name: &str,
@@ -423,14 +451,38 @@ pub async fn from_archive(
 	archive: &Path,
 	source: &Source,
 ) -> Result<Outcome, Error> {
+	let admitting = Some(Stage::Admitting);
+	let running = store::Outcome::Running;
+	match host.store.record(name, Action::Deploy, source, None, running, admitting) {
+		Ok(id) => archived(host, id, name, manifest, archive).await,
+		Err(error) => {
+			let _ = tokio::fs::remove_file(archive).await;
+			Err(error.into())
+		}
+	}
+}
+
+/// `from_archive` into event `id`, already open: moved on as the archive is admitted, loaded and
+/// deployed, and closed at the stage that fails.
+async fn archived(
+	host: &Arc<Host>,
+	id: i64,
+	name: &str,
+	manifest: Manifest,
+	archive: &Path,
+) -> Result<Outcome, Error> {
+	let store = &host.store;
 	let deployed = async {
-		admit(host, name, &manifest)?;
+		staged(store, id, Stage::Admitting, async { admit(host, name, &manifest) }).await?;
 		// One deploy at a time on a node: two would snapshot, stop and route over each other.
 		let _one = host.deploying.lock().await;
-		let file = tokio::fs::File::open(archive).await.map_err(Error::Archive)?;
-		let loaded = host.engine.load(name, tokio_util::io::ReaderStream::new(file)).await;
-		let image = loaded.map_err(Error::Load)?;
-		deploy(host, manifest, image, source).await
+		let image = staged(store, id, Stage::Loading, async {
+			let file = tokio::fs::File::open(archive).await.map_err(Error::Archive)?;
+			let loaded = host.engine.load(name, tokio_util::io::ReaderStream::new(file)).await;
+			loaded.map_err(Error::Load)
+		})
+		.await?;
+		deploy(host, id, manifest, image).await
 	}
 	.await;
 	let _ = tokio::fs::remove_file(archive).await;
@@ -486,6 +538,7 @@ pub async fn redeploy(host: &Arc<Host>, name: &str) -> Result<Outcome, Error> {
 		&source,
 		Some(&app.image),
 		store::Outcome::Running,
+		Some(Stage::Starting),
 	)?;
 	let result = async {
 		let current = Version { manifest: app.manifest.clone(), image: app.image.clone() };
@@ -522,8 +575,8 @@ pub async fn rollback(host: &Arc<Host>, name: &str, with_data: bool) -> Result<O
 	};
 	let action = if with_data { Action::RollbackWithData } else { Action::Rollback };
 	let source = Source::panel();
-	let id =
-		host.store.record(name, action, &source, Some(&previous.image), store::Outcome::Running)?;
+	let (image, running) = (Some(previous.image.as_str()), store::Outcome::Running);
+	let id = host.store.record(name, action, &source, image, running, Some(Stage::Starting))?;
 	let result = async {
 		let current = Version { manifest: app.manifest.clone(), image: app.image.clone() };
 		let snapshot = run_version(host, &previous, Some(&current), restore.as_deref()).await?;
@@ -557,7 +610,8 @@ pub async fn act(host: &Arc<Host>, name: &str, action: Action) -> Result<(), Err
 	let _one = host.deploying.lock().await;
 	let app = actionable(host, name)?;
 	let source = Source::panel();
-	let id = host.store.record(name, action, &source, Some(&app.image), store::Outcome::Running)?;
+	let running = store::Outcome::Running;
+	let id = host.store.record(name, action, &source, Some(&app.image), running, None)?;
 	// Sidecars are up before their app and down after it. See platform's
 	// spec/architecture/objects.md.
 	let sidecars = app.manifest.sidecars();
@@ -614,7 +668,7 @@ async fn restart_later(host: &Arc<Host>, name: &str) -> Result<(), Error> {
 	};
 	let source = Source::panel();
 	let outcome = if name == "host" { store::Outcome::Succeeded } else { store::Outcome::Running };
-	let id = host.store.record(name, Action::Restart, &source, image.as_deref(), outcome)?;
+	let id = host.store.record(name, Action::Restart, &source, image.as_deref(), outcome, None)?;
 	let host = host.clone();
 	let name = name.to_owned();
 	tokio::spawn(async move {
@@ -663,7 +717,20 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 	// See spec/architecture/host.md, "Caddy is deployed like any app, and is the one door".
 	let artifacts = caddy_first(artifacts, |artifact| artifact.app.as_str());
 	for artifact in artifacts.iter().filter(|artifact| artifact.app != "host") {
-		let fetched = match github.fetch(artifact, &host.config.incoming).await {
+		let source = Source::run(run, commit.clone());
+		let (app, running, downloading) =
+			(artifact.app.as_str(), store::Outcome::Running, Some(Stage::Downloading));
+		let opened = host.store.record(app, Action::Deploy, &source, None, running, downloading);
+		let id = match opened {
+			Ok(id) => id,
+			Err(error) => {
+				eprintln!("host: run {run}: {}: {error}", artifact.app);
+				whole = false;
+				continue;
+			}
+		};
+		let fetching = github.fetch(artifact, &host.config.incoming);
+		let fetched = match staged(&host.store, id, Stage::Downloading, fetching).await {
 			Ok(fetched) => fetched,
 			Err(error) => {
 				eprintln!("host: run {run}: {}: {error}", artifact.app);
@@ -671,7 +738,8 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 				continue;
 			}
 		};
-		let manifest = match Manifest::parse(&fetched.declaration) {
+		let reading = async { Manifest::parse(&fetched.declaration) };
+		let manifest = match staged(&host.store, id, Stage::Admitting, reading).await {
 			Ok(manifest) => manifest,
 			Err(error) => {
 				eprintln!("host: run {run}: {}: {error}", artifact.app);
@@ -681,20 +749,19 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 		};
 		// Built for every node; deployed only where it is placed.
 		if !manifest.placements.iter().any(|placement| placement == &host.config.node) {
+			skip(&host, id, &unplaced(&manifest.placements));
 			let _ = tokio::fs::remove_file(&fetched.image).await;
 			continue;
 		}
-		let source = Source::run(run, commit.clone());
 		// Held stopped from the panel: the run is recorded, not started. See
 		// spec/architecture/host.md, "A stop holds until a start".
 		if host.store.app(&artifact.app).ok().flatten().is_some_and(|app| app.held) {
-			let skipped = store::Outcome::Skipped;
-			let _ = host.store.record(&artifact.app, Action::Deploy, &source, None, skipped);
+			skip(&host, id, HELD);
 			let _ = tokio::fs::remove_file(&fetched.image).await;
 			eprintln!("host: run {run}: {} is held stopped, so it was not deployed", artifact.app);
 			continue;
 		}
-		match from_archive(&host, &artifact.app, manifest, &fetched.image, &source).await {
+		match archived(&host, id, &artifact.app, manifest, &fetched.image).await {
 			Ok(outcome) => eprintln!("host: run {run}: {} is {}", outcome.name, outcome.image),
 			Err(error) => {
 				eprintln!("host: run {run}: {}: {error}", artifact.app);
@@ -703,6 +770,17 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 		}
 	}
 	whole
+}
+
+/// Why a run's deploy was passed over for an app held stopped.
+const HELD: &str = "held stopped from the panel";
+
+/// Why a run's deploy was passed over for an app not placed on this node.
+fn unplaced(placements: &[String]) -> String {
+	match placements {
+		[] => "placed on no node".to_owned(),
+		placements => format!("placed on {}, not on this node", placements.join(", ")),
+	}
 }
 
 /// The run's artifacts with caddy's first and the rest in the order they came. Deploying an app
@@ -781,6 +859,39 @@ async fn collect(host: &Host) -> Result<(), Error> {
 	}
 	host.engine.collect(&names, &keep).await?;
 	Ok(())
+}
+
+#[cfg(test)]
+mod stages {
+	use super::{Error, staged};
+	use crate::store::{Action, Outcome, Source, Stage, Store};
+
+	#[tokio::test]
+	async fn a_load_that_fails_closes_its_event_failed_at_loading() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let (running, admitting) = (Outcome::Running, Some(Stage::Admitting));
+		let id = store.record("geo", Action::Deploy, &Source::upload(), None, running, admitting);
+		let id = id.unwrap();
+		staged(&store, id, Stage::Admitting, async { Ok::<_, Error>(()) }).await.unwrap();
+		let [event] = store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Running, admitting));
+
+		let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+		let loading = async { Err::<String, _>(Error::Archive(missing)) };
+		assert!(staged(&store, id, Stage::Loading, loading).await.is_err());
+		let [event] = store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Failed, Some(Stage::Loading)));
+		assert!(event.detail.is_some_and(|detail| detail.starts_with("the archive:")));
+		assert!(event.finished_at.is_some());
+	}
+
+	#[test]
+	fn a_deploy_passed_over_says_where_it_is_placed() {
+		assert_eq!(super::unplaced(&[]), "placed on no node");
+		let placements = ["nrt".to_owned(), "hnd".to_owned()];
+		assert_eq!(super::unplaced(&placements), "placed on nrt, hnd, not on this node");
+	}
 }
 
 #[cfg(test)]

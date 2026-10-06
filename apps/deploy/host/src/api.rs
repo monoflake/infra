@@ -1,5 +1,6 @@
 //! host's HTTP surface. One token admits everything but `/health`, on the LAN as much as through
-//! the tunnel -- see spec/architecture/host.md, "One token, behind two doors".
+//! the tunnel -- see spec/architecture/host.md, "One token, behind two doors" -- and a second,
+//! optional one admits reading alone.
 
 use crate::Host;
 use crate::environment;
@@ -7,9 +8,9 @@ use crate::images;
 use crate::inspect;
 use crate::node;
 use crate::rollout::{self, Error as DeployError};
-use crate::store::{Action, Deployed, Route, Source};
+use crate::store::{Action, Deployed, Route, Source, Store};
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, RawQuery, Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -26,6 +27,7 @@ pub fn router(host: Arc<Host>) -> Router {
 		.route("/apps", get(apps))
 		.route("/apps/{name}", get(app).post(upload).layer(DefaultBodyLimit::disable()))
 		.route("/apps/{name}/history", get(history))
+		.route("/events", get(events))
 		.route("/apps/{name}/redeploy", post(redeploy))
 		.route("/apps/{name}/rollback", post(rollback))
 		.route("/apps/{name}/start", post(start))
@@ -133,12 +135,16 @@ const SESSION: &str = "host_token";
 /// Thirty days, after which the panel asks again.
 const SESSION_SECONDS: u32 = 30 * 24 * 60 * 60;
 
-/// The token a request carries: its `Authorization` header, or the panel's cookie.
-fn carried(headers: &header::HeaderMap) -> &str {
-	let bearer = headers
+/// The token in a request's `Authorization` header.
+fn bearer(headers: &header::HeaderMap) -> Option<&str> {
+	headers
 		.get(header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
-		.and_then(|value| value.strip_prefix("Bearer "));
+		.and_then(|value| value.strip_prefix("Bearer "))
+}
+
+/// The token a request carries: its `Authorization` header, or the panel's cookie.
+fn carried(headers: &header::HeaderMap) -> &str {
 	let cookie = || {
 		headers
 			.get_all(header::COOKIE)
@@ -149,7 +155,7 @@ fn carried(headers: &header::HeaderMap) -> &str {
 			.find(|(name, _)| *name == SESSION)
 			.map(|(_, value)| value)
 	};
-	bearer.or_else(cookie).unwrap_or_default()
+	bearer(headers).or_else(cookie).unwrap_or_default()
 }
 
 #[derive(Deserialize)]
@@ -175,12 +181,47 @@ async fn sign_out() -> Response {
 	([(header::SET_COOKIE, cookie)], response::success(StatusCode::OK, ())).into_response()
 }
 
-async fn admit(State(host): State<Arc<Host>>, request: Request, next: Next) -> Response {
-	let given = carried(request.headers());
-	if !same(given.as_bytes(), host.config.token.as_bytes()) {
-		return response::failure(StatusCode::UNAUTHORIZED, "invalid_token");
+/// Why a request's token does not admit it.
+#[derive(Debug, PartialEq)]
+enum Refusal {
+	/// No token, or one host does not know.
+	Unknown,
+	/// The read token, on a request that would act.
+	ReadOnly,
+}
+
+/// Whether a request is admitted: anything with the token, and a GET with the read token, which is
+/// taken from the header alone since the panel's cookie only ever holds the token.
+fn admission(
+	headers: &header::HeaderMap,
+	method: &Method,
+	token: &str,
+	read_token: Option<&str>,
+) -> Result<(), Refusal> {
+	if same(carried(headers).as_bytes(), token.as_bytes()) {
+		return Ok(());
 	}
-	next.run(request).await
+	let read = read_token
+		.zip(bearer(headers))
+		.is_some_and(|(expected, given)| same(given.as_bytes(), expected.as_bytes()));
+	match (read, method == Method::GET) {
+		(false, _) => Err(Refusal::Unknown),
+		(true, true) => Ok(()),
+		(true, false) => Err(Refusal::ReadOnly),
+	}
+}
+
+async fn admit(State(host): State<Arc<Host>>, request: Request, next: Next) -> Response {
+	let config = &host.config;
+	let admitted =
+		admission(request.headers(), request.method(), &config.token, config.read_token.as_deref());
+	match admitted {
+		Ok(()) => next.run(request).await,
+		Err(Refusal::Unknown) => response::failure(StatusCode::UNAUTHORIZED, "invalid_token"),
+		Err(Refusal::ReadOnly) => {
+			failed(StatusCode::FORBIDDEN, "invalid_token", "This token reads and does not act")
+		}
+	}
 }
 
 /// host is reached from the LAN and the tailnet alone, so a refusal may say exactly what went
@@ -261,15 +302,24 @@ struct Page {
 const EVENTS: u32 = 50;
 const MOST_EVENTS: u32 = 500;
 
-/// An app's events, the newest first, a page at a time: the next page is the one `before` the
-/// last id of this one.
+/// Events, the newest first, a page at a time: the next page is the one `before` the last id of
+/// this one. One app's, or every app's when `app` is none.
+fn paged(store: &Store, app: Option<&str>, page: &Page) -> Response {
+	let limit = page.limit.unwrap_or(EVENTS).clamp(1, MOST_EVENTS);
+	stored(store.events(app, page.before, limit))
+}
+
 async fn history(
 	State(host): State<Arc<Host>>,
 	Path(name): Path<String>,
 	Query(page): Query<Page>,
 ) -> Response {
-	let limit = page.limit.unwrap_or(EVENTS).clamp(1, MOST_EVENTS);
-	stored(host.store.events(Some(&name), page.before, limit))
+	paged(&host.store, Some(&name), &page)
+}
+
+/// Every app's events on this node.
+async fn events(State(host): State<Arc<Host>>, Query(page): Query<Page>) -> Response {
+	paged(&host.store, None, &page)
 }
 
 /// A panel action's refusal, by what went wrong.
@@ -761,6 +811,66 @@ mod tests {
 		let mut other = HeaderMap::new();
 		other.insert(header::COOKIE, HeaderValue::from_static("not_host_token=abc"));
 		assert_eq!(super::carried(&other), "");
+	}
+
+	#[test]
+	fn the_read_token_reads_from_the_header_alone_and_never_acts() {
+		use super::{Refusal, admission};
+		use axum::http::{HeaderMap, HeaderValue, Method, header};
+		let with = |name, value: &'static str| {
+			let mut headers = HeaderMap::new();
+			headers.insert(name, HeaderValue::from_static(value));
+			headers
+		};
+		let read = with(header::AUTHORIZATION, "Bearer reader");
+		let admitted =
+			|headers: &HeaderMap, method| admission(headers, &method, "full", Some("reader"));
+		assert_eq!(admitted(&read, Method::GET), Ok(()));
+		assert_eq!(admitted(&read, Method::POST), Err(Refusal::ReadOnly));
+		assert_eq!(admitted(&read, Method::DELETE), Err(Refusal::ReadOnly));
+		// The panel's cookie only ever holds the token, so the read token is not taken from one.
+		let cookie = with(header::COOKIE, "host_token=reader");
+		assert_eq!(admitted(&cookie, Method::GET), Err(Refusal::Unknown));
+		let full = with(header::AUTHORIZATION, "Bearer full");
+		assert_eq!(admitted(&full, Method::POST), Ok(()));
+		assert_eq!(admitted(&with(header::COOKIE, "host_token=full"), Method::PUT), Ok(()));
+		// Unset, there is no read token at all.
+		assert_eq!(admission(&read, &Method::GET, "full", None), Err(Refusal::Unknown));
+		assert_eq!(admission(&HeaderMap::new(), &Method::GET, "full", None), Err(Refusal::Unknown));
+	}
+
+	#[tokio::test]
+	async fn every_apps_events_page_backwards_from_the_newest() {
+		use super::{Page, paged};
+		use crate::store::{Action, Outcome, Source, Stage, Store};
+		use http_body_util::BodyExt;
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let run = Source::run(7, Some("abc".into()));
+		let ids: Vec<i64> = ["geo", "nas", "geo", "cron"]
+			.into_iter()
+			.map(|app| {
+				let (running, loading) = (Outcome::Running, Some(Stage::Loading));
+				store.record(app, Action::Deploy, &run, None, running, loading).unwrap()
+			})
+			.collect();
+		let read = async |page: Page| {
+			let body = paged(&store, None, &page).into_body().collect().await.unwrap().to_bytes();
+			serde_json::from_slice::<serde_json::Value>(&body).unwrap()["data"].clone()
+		};
+		let ids_of = |data: &serde_json::Value| -> Vec<i64> {
+			data.as_array().unwrap().iter().map(|event| event["id"].as_i64().unwrap()).collect()
+		};
+		let first = read(Page { before: None, limit: Some(2) }).await;
+		assert_eq!(ids_of(&first), [ids[3], ids[2]]);
+		assert_eq!(first[0]["app"], "cron");
+		assert_eq!((&first[0]["stage"], &first[0]["source"]["run"]), (&"loading".into(), &7.into()));
+		assert_eq!(first[0]["source"]["commit"], "abc");
+		let next = read(Page { before: Some(ids[2]), limit: Some(2) }).await;
+		assert_eq!(ids_of(&next), [ids[1], ids[0]]);
+		// No number is fifty, and none is less than one.
+		assert_eq!(ids_of(&read(Page { before: None, limit: None }).await).len(), 4);
+		assert_eq!(ids_of(&read(Page { before: None, limit: Some(0) }).await), [ids[3]]);
 	}
 
 	#[test]

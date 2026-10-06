@@ -514,6 +514,9 @@ installing the pnpm the repository names.
 cookie holding it, `HttpOnly`, `Secure` and `SameSite=Strict`, for thirty days, and every request
 after carries that.
 The API takes the cookie or an `Authorization` header alike, so scripts and keeper are unchanged.
+**A second token reads and does not act**: `HOST_READ_TOKEN`, optional, taken from the header alone,
+admits `GET` and is refused anything else -- what the platform's console carries, since the token
+above is root on the machine; see platform's `spec/architecture/console.md`.
 The token is asked for on every door, the LAN's included; from the public, Access stands in front
 as well.
 
@@ -533,6 +536,15 @@ start, a stop, a restart and a deploy skipped are each a row: which app, what st
 and its commit, an upload, or the panel -- the image, when it started and ended, how it ended, and
 why when it failed, with the logs of the failure. The panel pages through them fifty at a time, the
 newest first, as far back as they go.
+
+**A deploy is one row that moves through its stages as it happens**: `downloading`, `admitting` --
+the declaration read, its placements and any hold weighed, `admit` passed -- `loading` and
+`starting`, which runs from stopping the old container to the new one passing its health check. A
+finished row keeps the stage it last reached, so a failure says where it happened. An artifact a run
+carries for an app placed elsewhere, or held, is a `Skipped` row saying which, so every node can say
+what it did with every run. `/api/events` pages every app's rows at once, for a view of the node
+rather than of one app. A row host left `Running` when it stopped is closed as failed when it starts
+again, since nothing will finish it.
 
 **Every line an app writes is kept.** Docker does not rotate the logs of a container host runs, and
 before a container is replaced its whole log is written to `/data/logs/<app>/`, one file per

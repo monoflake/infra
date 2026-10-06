@@ -123,6 +123,7 @@ mod tests {
 			image: Some(format!("sha256:{id}")),
 			snapshot: Some("/data/snapshots/geo/1".into()),
 			outcome: Outcome::Failed,
+			stage: None,
 			detail: Some("private words".into()),
 			started_at: format!("t{id}"),
 			finished_at: None,

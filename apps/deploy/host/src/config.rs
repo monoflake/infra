@@ -14,6 +14,8 @@ pub struct Config {
 	/// This node's placement name, matched against what a declaration lists.
 	pub node: String,
 	pub token: String,
+	/// A second token, from `HOST_READ_TOKEN`, that reads and never acts; none when it is unset.
+	pub read_token: Option<String>,
 	pub listen: SocketAddr,
 	/// This container's own name, which it attaches to each app's network to check its health.
 	pub own_container: String,
@@ -91,6 +93,7 @@ impl Config {
 		Ok(Self {
 			node: required("NODE")?,
 			token: required("HOST_TOKEN")?,
+			read_token: std::env::var("HOST_READ_TOKEN").ok().filter(|value| !value.is_empty()),
 			listen,
 			own_container: optional("OWN_CONTAINER", "host"),
 			snapshots_root: PathBuf::from(optional("SNAPSHOTS_ROOT", "/data/.snapshots")),

@@ -64,6 +64,13 @@ async fn main() -> anyhow::Result<()> {
 		config,
 	});
 
+	// Nothing is left to finish what was running when host last stopped.
+	match host.store.sweep() {
+		Ok(0) => {}
+		Ok(closed) => eprintln!("host: closed {closed} events cut short by the last restart"),
+		Err(error) => eprintln!("host: closing events cut short by the last restart: {error}"),
+	}
+
 	// What was running keeps running whatever happens here; these only put Caddy back in step with
 	// the state. A failure is reported and serving goes on, since the panel is how it is fixed.
 	if let Err(error) = rollout::attach(&host).await {

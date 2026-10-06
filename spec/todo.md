@@ -17,3 +17,6 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
 - **`app_of` stops reading a bare `deploy-<app>` as arm64** once no run that still names its
   artifacts that way is fresh enough to deploy -- [architecture/host.md](architecture/host.md),
   "The machine pulls; nothing pushes into it".
+- **A health-check stage of its own**, which needs `libs/deploy`'s `replace_beside` to report its
+  progress: today `starting` covers the start and the check together --
+  [architecture/host.md](architecture/host.md), "Every event is kept, and none is pruned".
