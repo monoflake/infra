@@ -122,8 +122,9 @@ downloading what it built. Images arrive as archives, never pulled from a regist
 the tailnet and the package mirrors all speak IPv6.
 
 **Every node with IPv4 runs an egress proxy, and a node without it asks them in turn.** tinyproxy, set
-up by `mise run node`, listening on the node's tailnet address alone and passing on HTTPS to
-GitHub's names and nothing else. A node with `ipv4 = false` gives host and keeper `EGRESS_PROXIES`,
+up by `mise run node`, admitting the tailnet alone and passing on HTTPS to GitHub's names and
+nothing else. It binds every address, since the tailnet's is not there yet when it starts at boot,
+and the firewall drops whatever does not come in over the tailnet. A node with `ipv4 = false` gives host and keeper `EGRESS_PROXIES`,
 every such proxy by its tailnet address, and `libs/deploy`'s GitHub client tries them in order. The
 tailnet is what makes this work: it carries IPv4 between nodes over an IPv6 path, so a container
 with IPv4 alone reaches a proxy at a `100.x` address on a machine with no IPv4 of its own.

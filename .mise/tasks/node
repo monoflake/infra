@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 #MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, or start its first host: `node host <name> [--run RUN_ID] [--dry-run]`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
-/data, and the firewall. Run again it changes nothing. See spec/architecture/nodes.md.
+/data, the egress proxy and the firewall. Run again it changes nothing. See
+spec/architecture/nodes.md.
 
 `node host <name>` starts the first host on a node set up that way and hands it a CI run, from
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
@@ -57,6 +58,28 @@ grep -q '^rc_need="data-mount"' /etc/conf.d/docker || echo 'rc_need="data-mount"
 rc-update add data-mount default >/dev/null
 rc-update add node-firewall boot >/dev/null
 """,
+}
+
+# The egress proxy's package and what only its family's way of running it needs: the identity
+# Debian's tinyproxy drops to (Alpine's init script already runs it as tinyproxy), and its log.
+PROXY_PORT = 8888
+PROXY = {
+	"debian": {
+		"install": "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq tinyproxy >/dev/null",
+		"identity": 'User tinyproxy\nGroup tinyproxy\nLogfile "/var/log/tinyproxy/tinyproxy.log"',
+		"prepare": "",
+		"enable": "systemctl enable --quiet tinyproxy",
+		"restart": "systemctl restart tinyproxy",
+		"running": "systemctl is-active --quiet tinyproxy",
+	},
+	"alpine": {
+		"install": "apk add --quiet tinyproxy tinyproxy-openrc",
+		"identity": "",
+		"prepare": "install -d -o tinyproxy -g tinyproxy /var/log/tinyproxy",
+		"enable": "rc-update add tinyproxy default >/dev/null",
+		"restart": "rc-service --quiet tinyproxy restart",
+		"running": "rc-service --quiet tinyproxy status",
+	},
 }
 
 START = {
@@ -142,11 +165,70 @@ def firewall(node):
 	return text.replace("@TRUSTED@", ", ".join(f'"{name}"' for name in trusted))
 
 
+def proxy_conf(family):
+	identity = PROXY[family]["identity"]
+	text = (NODES / "tinyproxy.conf").read_text()
+	return text.replace("@IDENTITY@\n", identity + "\n" if identity else "")
+
+
+def proxy(family):
+	"""Installs the egress proxy and restarts it only when what it reads changed."""
+	steps = PROXY[family]
+	lines = ["command -v tinyproxy >/dev/null || " + steps["install"], steps["prepare"],
+		"mkdir -p /etc/tinyproxy", "changed=0"]
+	files = (("tinyproxy.conf", proxy_conf(family)), ("filter", (NODES / "tinyproxy.filter").read_text()))
+	for file, text in files:
+		path = f"/etc/tinyproxy/{file}"
+		lines += [
+			f"printf '%s' {encoded(text)} | base64 -d > {path}.new",
+			f"cmp -s {path}.new {path} || changed=1",
+			f"mv {path}.new {path}",
+		]
+	lines.append(steps["enable"])
+	lines.append(f'if [ "$changed" = 1 ] || ! {steps["running"]}; then {steps["restart"]}; fi')
+	return "\n".join(lines) + "\n"
+
+
+# Runs on a node with no IPv4, with the proxies in `want`. host and keeper read the line when they
+# are next recreated, so nothing is restarted. See spec/architecture/nodes.md, "The nodes".
+def egress(proxies):
+	line = "EGRESS_PROXIES=" + " ".join(proxies)
+	return f"""file=/data/apps/host/.env
+want={shlex.quote(line)}
+if [ ! -f "$file" ]; then
+	echo "node: $file does not exist; EGRESS_PROXIES is not set"
+elif grep -qxF -- "$want" "$file"; then
+	echo "node: EGRESS_PROXIES is current"
+else
+	umask 077
+	{{ grep -v '^EGRESS_PROXIES=' "$file" || true; printf '%s\\n' "$want"; }} > "$file.new"
+	chown root:root "$file.new"
+	chmod 600 "$file.new"
+	mv "$file.new" "$file"
+	echo "node: EGRESS_PROXIES is written"
+fi
+"""
+
+
+def proxy_addresses(nodes):
+	"""Each proxy node's tailnet IPv4, in nodes.toml order with the home tier last."""
+	proxies = [name for name, node in nodes.items() if node.get("ipv4", True)]
+	proxies.sort(key=lambda name: nodes[name]["tier"] == "home")
+	urls = []
+	for name in proxies:
+		found = subprocess.run(["tailscale", "ip", "-4", name], text=True, stdout=subprocess.PIPE)
+		address = found.stdout.split()[0] if found.returncode == 0 and found.stdout.split() else None
+		if address is None:
+			sys.exit(f"node: tailscale has no IPv4 for {name}")
+		urls.append(f"http://{address}:{PROXY_PORT}")
+	return urls
+
+
 def encoded(text):
 	return base64.b64encode(text.encode()).decode()
 
 
-def script(name, node):
+def script(name, node, proxies):
 	"""The whole of what runs on the machine, as one shell script."""
 	family = node["system"]
 	lines = [
@@ -164,6 +246,8 @@ def script(name, node):
 		lines.append(f"printf '%s' {encoded((NODES / source).read_text())} | base64 -d > {target}")
 		lines.append(f"chmod {mode} {target}")
 	lines.append(SETUP[family])
+	# Every node with IPv4 is a proxy; one without asks them. See spec/architecture/nodes.md.
+	lines.append(proxy(family) if node.get("ipv4", True) else egress(proxies))
 	# The old name is replaced where /etc/hosts gives it, so the machine still resolves itself.
 	lines.append(
 		"""awk -v o="$old" -v n="$name" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == o) $i = n } { print }' """
@@ -375,15 +459,16 @@ def main():
 	if not names or any(name not in nodes for name in names) or (address and len(names) > 1):
 		sys.exit(f"node: name one of {', '.join(nodes)} or --all; --address takes one")
 
+	proxies = proxy_addresses(nodes) if any(not nodes[n].get("ipv4", True) for n in names) else []
 	failed = []
 	for name in names:
 		node = nodes[name]
 		where = address or name
 		if dry:
-			print(f"# node {name}, {node['system']}, at root@{where}\n{script(name, node)}")
+			print(f"# node {name}, {node['system']}, at root@{where}\n{script(name, node, proxies)}")
 			continue
 		print(f"node: {name} at root@{where}")
-		if ssh(where, "sh -s", script(name, node)) != 0:
+		if ssh(where, "sh -s", script(name, node, proxies)) != 0:
 			failed.append(name)
 			continue
 		# A new session, over the tailnet, is what the firewall has to let through.

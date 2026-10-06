@@ -1,0 +1,5 @@
+# What the egress proxy passes on, matched against the host: GitHub, what it serves from, and the
+# Azure blob storage artifact downloads redirect to.
+(^|\.)github\.com$
+(^|\.)githubusercontent\.com$
+\.blob\.core\.windows\.net$
