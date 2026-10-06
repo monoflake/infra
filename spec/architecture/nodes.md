@@ -104,8 +104,9 @@ until host deploys it.
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.
 
-**What every node runs is host, keeper, Caddy, the tunnel and the meter.** The panel and the
-resolver answer the house's LAN and stay on the node that has one.
+**What every node runs is host, keeper, the panel, Caddy, the tunnel and the meter.** The panel is
+on every node because CI's notice reaches host through it, on the panel's own name; the resolver
+answers the house's LAN and stays on the node that has one.
 
 **Each node's host has a token of its own**, `HOST_TOKEN_<NAME>` in the repository's secrets, made
 the first time the node is brought up: the token is root on its machine, so one leaked stays one
