@@ -660,6 +660,8 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 		return false;
 	}
 	let mut whole = true;
+	// See spec/architecture/host.md, "Caddy is deployed like any app, and is the one door".
+	let artifacts = caddy_first(artifacts, |artifact| artifact.app.as_str());
 	for artifact in artifacts.iter().filter(|artifact| artifact.app != "host") {
 		let fetched = match github.fetch(artifact, &host.config.incoming).await {
 			Ok(fetched) => fetched,
@@ -701,6 +703,13 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 		}
 	}
 	whole
+}
+
+/// The run's artifacts with caddy's first and the rest in the order they came. Deploying an app
+/// attaches caddy to its network, so caddy must already exist.
+fn caddy_first<T>(mut artifacts: Vec<T>, app: impl Fn(&T) -> &str) -> Vec<T> {
+	artifacts.sort_by_key(|artifact| app(artifact) != "caddy");
+	artifacts
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -776,8 +785,16 @@ async fn collect(host: &Host) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-	use super::{TAKEN, deployable};
+	use super::{TAKEN, caddy_first, deployable};
 	use deploy::manifest::{Invalid, OWN};
+
+	#[test]
+	fn caddy_is_deployed_first_and_the_rest_keep_their_order() {
+		let run = vec!["keeper", "meter", "tunnel", "caddy"];
+		assert_eq!(caddy_first(run, |app| app), ["caddy", "keeper", "meter", "tunnel"]);
+		let without = vec!["meter", "keeper"];
+		assert_eq!(caddy_first(without, |app| app), ["meter", "keeper"]);
+	}
 
 	#[test]
 	fn deploys_every_name_the_platform_owns_but_its_own() {
