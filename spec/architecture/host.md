@@ -507,7 +507,7 @@ The API takes the cookie or an `Authorization` header alike, so scripts and keep
 The token is asked for on every door, the LAN's included; from the public, Access stands in front
 as well.
 
-**Notifications and a second node come after the first version**, which deploys the apps of this
+**Notifications and more nodes -- [nodes.md](nodes.md) -- come after the first version**, which deploys the apps of this
 repository and the platform's and adopts upstream images.
 
 ### What host keeps, and where
