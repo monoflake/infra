@@ -10,7 +10,5 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   empty list -- [architecture/host.md](architecture/host.md).
 - **The panel draws what host's inspect routes answer**: a file manager and a view of containers --
   [architecture/inspect.md](architecture/inspect.md).
-- **`home` becomes `rdu`**, in every placement and in host's `NODE`, since a node is named for
-  where it is -- [architecture/nodes.md](architecture/nodes.md), "A node is named for where it is".
 - **The egress proxy for `gvx` and `bru`**, before their IPv4 egress ends --
   [architecture/nodes.md](architecture/nodes.md), "The nodes".
