@@ -62,7 +62,7 @@ pub enum Invalid {
 	Schedule(String),
 	#[error("`{0}` declares `[[schedules]]` but answers through neither `[api]` nor a socket")]
 	Unscheduled(String),
-	#[error("`[shape]` asks for `{0}`, and a role is one of scheduler, steward and reporter")]
+	#[error("`[shape]` asks for `{0}`, and a role is one of scheduler, steward, reporter and peer")]
 	Shape(String),
 	#[error("`[driver]` provides `{0}`, and a driver is one of objects and postgres")]
 	Driver(String),

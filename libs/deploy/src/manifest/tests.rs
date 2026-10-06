@@ -338,6 +338,8 @@ fn a_role_or_a_driver_is_asked_for_by_a_word_the_node_knows() {
 	assert!(OWN.contains(&"keeper") && !OWN.contains(&"cron"));
 	let cron = Manifest::parse(include_str!("../../fixtures/cron.toml"));
 	assert_eq!(cron.unwrap().shape.map(|shape| shape.kind), Some("scheduler".into()));
+	let peer = Manifest::parse(&format!("{GEO}\n[shape]\nkind = \"peer\"\n")).unwrap();
+	assert_eq!(peer.check("geo", "rdu"), Ok(()));
 	let root = Manifest::parse(&format!("{GEO}\n[shape]\nkind = \"root\"\n")).unwrap();
 	assert_eq!(root.check("geo", "rdu"), Err(Invalid::Shape("root".into())));
 	let redis = Manifest::parse(&format!("{GEO}\n[driver]\nprovides = \"redis\"\n")).unwrap();

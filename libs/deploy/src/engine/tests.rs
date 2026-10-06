@@ -173,3 +173,14 @@ fn the_reporter_shape_mounts_the_meters_directory_read_only() {
 	let shape = Shape::Reporter { env: vec![], meter: "/m".into() };
 	assert!(shape.networked());
 }
+
+#[test]
+fn the_peer_shape_publishes_its_port_on_every_address_at_the_same_number() {
+	let published = peer_ports(20800);
+	assert_eq!(published.len(), 1);
+	let bindings = published["20800/tcp"].as_deref().unwrap();
+	let addresses: Vec<_> = bindings.iter().map(|binding| binding.host_ip.as_deref()).collect();
+	assert_eq!(addresses, [Some("0.0.0.0"), Some("::")]);
+	assert!(bindings.iter().all(|binding| binding.host_port.as_deref() == Some("20800")));
+	assert!(Shape::Peer { env: vec![] }.networked());
+}

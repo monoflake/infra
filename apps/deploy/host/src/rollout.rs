@@ -81,8 +81,23 @@ const TAKEN: [&str; 6] = ["keeper", "meter", "caddy", "tunnel", "panel", RESOLVE
 /// The house's DNS, in a shape of its own and with its configuration written before it starts.
 const RESOLVER: &str = "resolver";
 
-/// The panel's name: the one app host's own network admits.
+/// The panel's name: the one app host's own network admits by name.
 const PANEL: &str = "panel";
+
+/// Whether host's own network admits `name`, run in `shape`: the panel, and an app run as a peer,
+/// which reads its own node's host. Nothing else but keeper joins it.
+fn admitted(name: &str, shape: &Shape) -> bool {
+	name == PANEL || matches!(shape, Shape::Peer { .. })
+}
+
+/// Whether host's own network admits `manifest`'s app in the shape `shape_named` gives it, apart
+/// from its environment, which no shape's admission reads.
+fn admits(host: &Host, manifest: &Manifest) -> bool {
+	let name = manifest.name.as_str();
+	let Ok(role) = host.config.grants.shape_of(manifest) else { return false };
+	let shape = shape_named(name, role, Vec::new(), placed(host), || Ok(Vec::new()));
+	shape.is_ok_and(|shape| admitted(name, &shape))
+}
 
 /// Infra's own that stand on no network of their own: the meter has none, and Caddy and the tunnel
 /// stand on the edge. A granted driver runs no container, so has none either.
@@ -146,13 +161,16 @@ fn shape_of(host: &Host, manifest: &Manifest) -> Result<Shape, Error> {
 				.collect(),
 		)
 	};
-	let placed = Placed {
+	let role = host.config.grants.shape_of(manifest)?;
+	shape_named(name, role, env, placed(host), sockets)
+}
+
+fn placed(host: &Host) -> Placed<'_> {
+	Placed {
 		tunnel: &host.config.caddy.tunnel_source,
 		meter: host.volumes.data(crate::node::METER),
 		lan: host.config.resolver.address.as_deref(),
-	};
-	let role = host.config.grants.shape_of(manifest)?;
-	shape_named(name, role, env, placed, sockets)
+	}
 }
 
 /// What a shape is given from the node beside its environment.
@@ -186,6 +204,7 @@ fn shape_named(
 		(_, Some(Role::Scheduler)) => Shape::Scheduler { env, sockets: sockets()? },
 		(_, Some(Role::Steward)) => Shape::Steward { env },
 		(_, Some(Role::Reporter)) => Shape::Reporter { env, meter: placed.meter },
+		(_, Some(Role::Peer)) => Shape::Peer { env },
 		_ => Shape::Sandboxed { env },
 	})
 }
@@ -238,7 +257,8 @@ async fn run_version(
 		| Shape::Platform { env }
 		| Shape::Observer { env }
 		| Shape::Edge { env }
-		| Shape::Tunnel { env, .. } = &mut shape
+		| Shape::Tunnel { env, .. }
+		| Shape::Peer { env } = &mut shape
 	{
 		bound(env, sidecars::binding(&next.manifest, &driver.manifest));
 	}
@@ -250,11 +270,12 @@ async fn run_version(
 	let snapshot =
 		replace_beside(&host.engine, &host.volumes, &members, &shape, next, current, restore, beside)
 			.await?;
-	// The panel reaches host on host's own network, which nothing else but keeper joins.
-	if next.manifest.name == PANEL {
+	// The panel and a peer reach host on host's own network.
+	let name = next.manifest.name.as_str();
+	if admitted(name, &shape) {
 		host
 			.engine
-			.join(&deploy::engine::network_of(&host.config.own_container), &[PANEL], false)
+			.join(&deploy::engine::network_of(&host.config.own_container), &[name], false)
 			.await?;
 	}
 	// A new Caddy is a new container, on none of the apps' networks yet.
@@ -830,15 +851,16 @@ pub fn render(host: &Host) -> Result<serde_json::Value, store::Error> {
 /// rather than restarted comes back attached to none of them.
 pub async fn attach(host: &Host) -> Result<(), RouteError> {
 	let members = [host.config.own_container.as_str(), host.config.caddy.container.as_str()];
-	// host's own network is the panel's and keeper's, never Caddy's: nothing is routed to host.
+	// host's own network is the panel's, a peer's and keeper's, never Caddy's: nothing is routed
+	// to host.
 	let own = deploy::engine::network_of(&host.config.own_container);
 	host.engine.network(&host.config.own_container, &members[..1]).await?;
 	host.engine.leave(&own, &members[1..]).await?;
-	if host.store.app(PANEL)?.is_some() {
-		host.engine.join(&own, &[PANEL], false).await?;
-	}
 	for app in host.store.apps()? {
 		let name = app.manifest.name.as_str();
+		if admits(host, &app.manifest) {
+			host.engine.join(&own, &[name], false).await?;
+		}
 		let driver = host.config.grants.driver_of(&app.manifest).is_some();
 		if !UNNETWORKED.contains(&name) && !driver && name != host.config.caddy.container {
 			host.engine.network(name, &members).await?;
@@ -954,6 +976,26 @@ mod tests {
 	}
 
 	#[test]
+	fn host_admits_the_panel_and_a_granted_peer_and_nothing_else() {
+		use super::{Placed, admitted, shape_named};
+		use crate::grants::Role;
+		use std::path::PathBuf;
+		let admits = |name: &str, role: Option<Role>| {
+			let placed = Placed { tunnel: "172.30.0.2", meter: PathBuf::new(), lan: Some("10.0.0.11") };
+			let shape = shape_named(name, role, vec![], placed, || Ok(vec![])).unwrap();
+			admitted(name, &shape)
+		};
+		assert!(admits("panel", None));
+		assert!(admits("relay", Some(Role::Peer)));
+		assert!(!admits("relay", None));
+		assert!(!admits("geo", None));
+		assert!(!admits("telemetry", Some(Role::Reporter)));
+		// Infra's own are shaped by name, so a peer granted to one does not make it a peer.
+		assert!(!admits("caddy", Some(Role::Peer)));
+		assert!(!admits("resolver", Some(Role::Peer)));
+	}
+
+	#[test]
 	fn infra_is_shaped_by_name_and_every_other_app_by_the_role_it_is_granted() {
 		use super::{Placed, shape_named};
 		use crate::grants::Role;
@@ -981,6 +1023,8 @@ mod tests {
 		assert!(matches!(cron, Shape::Scheduler { .. }));
 		let apt = shape_named("apt", Some(Role::Steward), vec![], placed(), unasked).unwrap();
 		assert!(matches!(apt, Shape::Steward { .. }));
+		let relay = shape_named("relay", Some(Role::Peer), vec![], placed(), unasked).unwrap();
+		assert!(matches!(relay, Shape::Peer { .. }));
 		let meter = shape_named("meter", None, vec![], placed(), unasked).unwrap();
 		assert!(matches!(meter, Shape::Observer { .. }));
 		let resolver = shape_named("resolver", None, vec![], placed(), unasked).unwrap();

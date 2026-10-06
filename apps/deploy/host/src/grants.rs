@@ -19,6 +19,9 @@ pub enum Role {
 	Driver(Driver),
 	/// Claims hostnames, which Caddy routes to it and the resolver answers with the node.
 	Hosts,
+	/// Talks to itself on every other node: its port published on the machine, and host's own
+	/// network joined.
+	Peer,
 }
 
 impl Role {
@@ -28,6 +31,7 @@ impl Role {
 			"steward" => Role::Steward,
 			"reporter" => Role::Reporter,
 			"hosts" => Role::Hosts,
+			"peer" => Role::Peer,
 			other => Role::Driver(Driver::named(other)?),
 		})
 	}
@@ -113,6 +117,7 @@ mod tests {
 		assert_eq!(Grants::parse("cron"), Err("cron".into()));
 		assert_eq!(Grants::parse("cron:root"), Err("cron:root".into()));
 		assert_eq!(Grants::parse(":scheduler"), Err(":scheduler".into()));
+		assert!(Grants::parse("relay:peer").unwrap().allows("relay", Role::Peer));
 	}
 
 	#[test]
@@ -127,6 +132,17 @@ mod tests {
 		assert_eq!(grants.shape_of(&other).unwrap_err().app, "geo");
 		let steward = declared("cron", "[shape]\nkind = \"steward\"");
 		assert_eq!(grants.shape_of(&steward).unwrap_err().role, "steward");
+	}
+
+	#[test]
+	fn a_peer_is_one_only_where_the_node_grants_it() {
+		let asking = declared("relay", "[shape]\nkind = \"peer\"");
+		let granted = Grants::parse("relay:peer").unwrap();
+		assert_eq!(granted.shape_of(&asking), Ok(Some(Role::Peer)));
+		let refused = Grants::parse("cron:scheduler").unwrap().shape_of(&asking).unwrap_err();
+		assert_eq!((refused.app.as_str(), refused.role.as_str()), ("relay", "peer"));
+		let elsewhere = declared("geo", "[shape]\nkind = \"peer\"");
+		assert_eq!(granted.shape_of(&elsewhere).unwrap_err().app, "geo");
 	}
 
 	#[test]

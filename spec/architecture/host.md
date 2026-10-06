@@ -144,8 +144,12 @@ whole of what host adds over a compose file, and it is why a manifest declares r
 The roles are what host can make of a container beyond the sandbox: the scheduler, which is given
 every job's table and each socket service's directory; the steward, which runs as root with the
 machine's D-Bus socket; the reporter, which is given host's account of the services and the
-meter's readings; the driver of a kind, whose image every sidecar of that kind runs; and a claim on
-hostnames, which Caddy routes and the resolver answers. An app asks in its `service.toml` --
+meter's readings; the peer, which talks to the same app on every other node -- its declared port
+published on the machine at the same number on every address, which the firewall admits from the
+tailnet alone (see [nodes.md](nodes.md), "Nothing comes in but over the tailnet"), and joined to
+host's own network to read its node's host with the read token; the driver of a kind, whose image
+every sidecar of that kind runs; and a claim on hostnames, which Caddy routes and the resolver
+answers. An app asks in its `service.toml` --
 `[shape] kind = "scheduler"`, `[driver] provides = "objects"` -- and the node's `.env` grants, in
 `GRANTS`, as `app:role` pairs: `cron:scheduler objects:objects gateway:hosts`.
 
@@ -158,7 +162,8 @@ services that hold them -- which is what lets infra be built without naming anyt
 the workspace's `spec/architecture/layers.md`, "What the package graph cannot see".
 
 Infra's own are the exception, shaped by name as before: host and keeper, the meter, Caddy, the
-tunnel and the resolver are what the node is made of, and naming them is infra naming itself.
+tunnel and the resolver are what the node is made of, and naming them is infra naming itself. **host's own network admits the panel, by name, and an app run as a peer**, by the shape it is
+actually run in, so an app of infra's own granted `peer` is not let in by the grant.
 
 **An app's directory belongs to the user its image runs as.** host creates it as root, and an image
 that runs as someone else -- the meter and the resolver as 65532, the panel as 1000 -- could not

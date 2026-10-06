@@ -51,6 +51,10 @@ pub enum Shape {
 	/// alone, and its configuration, which host writes, read-only. See spec/architecture/host.md,
 	/// "The resolver answers the gateway's names, and passes the rest on".
 	Resolver { env: Vec<String>, address: String },
+	/// The peer, the platform's relay: sandboxed like any app, its declared port published on the
+	/// machine at the same number, and joined to host's own network by host. See
+	/// spec/architecture/host.md, "A role is asked for by the app and granted by the node".
+	Peer { env: Vec<String> },
 }
 
 impl Shape {
@@ -78,6 +82,18 @@ pub const RESOLVER_PORTS: [(&str, &str); 2] = [("1053/udp", "53"), ("1053/tcp", 
 
 /// Where the resolver shape mounts host's rendered configuration, read-only.
 pub const RESOLVER_MOUNT: (&str, &str) = ("host", "/etc/coredns");
+
+/// What the peer shape publishes `port` as: the same number on every address of the machine,
+/// rather than the tailnet's, which is not there yet when Docker starts containers at boot. The
+/// firewall drops what does not come over the tailnet; see spec/architecture/nodes.md, "Nothing
+/// comes in but over the tailnet".
+pub(super) fn peer_ports(port: u16) -> HashMap<String, Option<Vec<PortBinding>>> {
+	let on = |address: &str| PortBinding {
+		host_ip: Some(address.into()),
+		host_port: Some(port.to_string()),
+	};
+	HashMap::from([(format!("{port}/tcp"), Some(vec![on("0.0.0.0"), on("::")]))])
+}
 
 /// Where the observer shape puts the machine's two kernel filesystems.
 pub const OBSERVED: [(&str, &str); 2] = [("/proc", "/host/proc"), ("/sys", "/host/sys")];
@@ -186,6 +202,7 @@ impl Engine {
 		// A ceiling on every container, and no swap past it: a limit that can be exceeded into swap
 		// is a slower machine rather than a limit. See spec/architecture/host.md.
 		let declared = manifest.container.as_ref().and_then(|container| container.memory_mb);
+		let declared_port = manifest.container.as_ref().and_then(|container| container.port);
 		let memory = i64::from(declared.unwrap_or(DEFAULT_MEMORY_MB)) * 1024 * 1024;
 		let logs = HostConfigLogConfig { typ: Some("json-file".into()), config: None };
 		let restart =
@@ -240,6 +257,13 @@ impl Engine {
 			Shape::Scheduler { env, sockets } => (sandboxed(scheduler_mounts(own, sockets)), env.clone()),
 			Shape::Steward { env } => (sandboxed(steward_mounts(own)), env.clone()),
 			Shape::Reporter { env, meter } => (sandboxed(reporter_mounts(own, meter)), env.clone()),
+			Shape::Peer { env } => {
+				let config = HostConfig {
+					port_bindings: declared_port.map(peer_ports),
+					..sandboxed(own.into_iter().collect())
+				};
+				(config, env.clone())
+			}
 			Shape::Resolver { env, address } => {
 				let (from, to) = RESOLVER_MOUNT;
 				let beside = data.parent().unwrap_or(data).join(from);
@@ -292,6 +316,7 @@ impl Engine {
 				Shape::Resolver { .. } => {
 					Some(RESOLVER_PORTS.iter().map(|(inside, _)| (*inside).to_owned()).collect())
 				}
+				Shape::Peer { .. } => declared_port.map(|port| vec![format!("{port}/tcp")]),
 				_ => None,
 			},
 			host_config: Some(host_config),
