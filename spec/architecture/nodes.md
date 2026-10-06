@@ -55,7 +55,9 @@ only the author reads and what needs its disk.
 which it dials out -- platform's `spec/architecture/services.md`, "Every node is the same node" --
 so whether a machine has a public IPv4, an IPv6, or neither changes nothing about how it is reached.
 The provider's firewall and the node's own both refuse whatever arrives unasked; ssh is reached over
-the tailnet, and a provider's console is the way back in when the tailnet is not.
+the tailnet, and a provider's console is the way back in when the tailnet is not. The one exception both
+let in is Tailscale's UDP port, 41641: without it every path to the node is relayed through
+Tailscale's servers rather than direct.
 
 **The node's own firewall is a table of its own, `inet node`, beside Docker's and Tailscale's and
 never touching them** -- [`nodes/firewall.nft`](../../nodes/firewall.nft):
@@ -81,7 +83,8 @@ again changes nothing: its name as hostname and on the tailnet, UTC, the files t
 for `/data` -- [host.md](host.md), "The control plane going down is not an outage" -- and the
 firewall, each written once for Debian and once for Alpine. cloud-init is told to keep the hostname,
 or it would put the provider's back at every boot. The first run names the machine by `--address`,
-since it is not yet called by its name.
+since it is not yet called by its name. A name set by hand in Tailscale's console outranks the one the machine
+asks for, so a node renamed there keeps its old tailnet name until the console says otherwise.
 
 **The firewall goes up under a guard.** Unless a second ssh session, opened after it, proves the
 machine is still reachable, the machine takes the table down by itself a minute later, so a rule that

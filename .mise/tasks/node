@@ -73,7 +73,7 @@ def script(name, node):
 		f"name={name}",
 		f"cloud_hostname={encoded((NODES / 'debian/cloud-hostname.cfg').read_text())}",
 		# A node declared one family and running another stops here, before anything is written.
-		f'. /etc/os-release; case "$ID $ID_LIKE" in *{family}*) ;; *) echo "not {family}: $ID" >&2; exit 1;; esac',
+		f'. /etc/os-release; case "$ID ${{ID_LIKE:-}}" in *{family}*) ;; *) echo "not {family}: $ID" >&2; exit 1;; esac',
 		"old=$(hostname)",
 		"mkdir -p /etc/node",
 		f"printf '%s' {encoded(firewall(node))} | base64 -d > /etc/node/firewall.nft",
