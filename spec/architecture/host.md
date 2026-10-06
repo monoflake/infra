@@ -314,6 +314,13 @@ it does not start at all**, so a node's first Caddy deployed by host needs `secr
 before it, or every door closes; the one it replaces is brought back by hand from the compose file
 beside it, `docker compose up -d`.
 
+**A node with no LAN asks for no certificate.** Its private side only mirrors the public names for
+the house's devices, so where host's configuration has no `LAN_ADDRESS` it renders neither the
+private side nor the certificates that serve it: such a Caddy answers its tunnel and its inside
+side, both plain HTTP, and needs no DNS token. One token that can write DNS stays on one node rather
+than on every one -- the direction platform's `spec/architecture/scheduling.md` sets for
+certificates held in one place.
+
 ### The tunnel is deployed like any app, at the address Caddy trusts
 
 **cloudflared is `apps/network/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an

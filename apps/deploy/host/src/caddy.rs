@@ -302,9 +302,15 @@ fn interfaces(apps: &[Deployed], routes: &[Route], public: bool) -> Vec<Target> 
 	targets
 }
 
-pub fn render(config: &CaddyConfig, grants: &Grants, apps: &[Deployed], routes: &[Route]) -> Value {
+/// The LAN's side, and the certificate policy that serves it and the names a claimant takes there.
+fn private_side(
+	config: &CaddyConfig,
+	grants: &Grants,
+	apps: &[Deployed],
+	routes: &[Route],
+	trusted: &Value,
+) -> (Value, Value) {
 	let private = &config.private_suffix;
-	let public = &config.public_suffix;
 
 	let mut inside = vec![refuse_unless(&config.private_sources)];
 	inside.push(api_host(format!("api.{private}"), apps, Side::Private));
@@ -312,13 +318,6 @@ pub fn render(config: &CaddyConfig, grants: &Grants, apps: &[Deployed], routes: 
 		inside.push(named(format!("{}.{private}", target.name), &target));
 	}
 	inside.push(abort());
-
-	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
-	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel));
-	for target in interfaces(apps, routes, true) {
-		outside.push(named(format!("{}.{public}", target.name), &target));
-	}
-	outside.push(json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }));
 
 	let claimant = claimant(grants, apps);
 	let mut lan = Vec::from_iter(claimed_hosts(config, claimant));
@@ -334,48 +333,85 @@ pub fn render(config: &CaddyConfig, grants: &Grants, apps: &[Deployed], routes: 
 		subjects.extend(edge.hosts.iter().cloned());
 	}
 
+	let server = json!({
+		"listen": [":443"],
+		"routes": lan,
+		"trusted_proxies": trusted,
+		"client_ip_headers": ["Cf-Connecting-Ip"]
+	});
+	let tls = json!({ "automation": { "policies": [{
+		"subjects": subjects,
+		"issuers": [{
+			"module": "acme",
+			"email": config.acme_email,
+			"challenges": { "dns": {
+				"provider": { "name": "cloudflare", "api_token": "{env.CLOUDFLARE_API_TOKEN}" },
+				"resolvers": [config.dns_resolver]
+			}}
+		}]
+	}]}});
+	(server, tls)
+}
+
+/// `lan` is whether the node has one; without it there is no private side, no certificate, and no
+/// claimant's names, which were only ever on that side. See spec/architecture/host.md, "Caddy is
+/// deployed like any app, and is the one door".
+pub fn render(
+	config: &CaddyConfig,
+	grants: &Grants,
+	apps: &[Deployed],
+	routes: &[Route],
+	lan: bool,
+) -> Value {
+	let public = &config.public_suffix;
+
+	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
+	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel));
+	for target in interfaces(apps, routes, true) {
+		outside.push(named(format!("{}.{public}", target.name), &target));
+	}
+	outside.push(json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }));
+
 	// The visitor's address comes from Cloudflare's header, and only when cloudflared sent it.
 	let trusted = json!({ "source": "static", "ranges": [config.tunnel_source] });
+	let private = lan.then(|| private_side(config, grants, apps, routes, &trusted));
+
+	let mut servers = serde_json::Map::new();
+	if let Some((server, _)) = &private {
+		servers.insert("private".into(), server.clone());
+	}
+	servers.insert(
+		"tunnel".into(),
+		json!({
+			"listen": [":80"],
+			"routes": [{
+				"match": [{ "host": [format!("*.{public}")] }],
+				"handle": [{ "handler": "subroute", "routes": outside }],
+				"terminal": true
+			}],
+			"errors": { "routes": [refused()] },
+			"trusted_proxies": trusted,
+			"client_ip_headers": ["Cf-Connecting-Ip"]
+		}),
+	);
+	// Plain HTTP on a port no one outside Caddy's networks reaches, so no certificate.
+	servers.insert(
+		"inside".into(),
+		json!({
+			"listen": [INSIDE_LISTEN],
+			"routes": inside_side(apps),
+			"automatic_https": { "disable": true }
+		}),
+	);
+
+	let mut caddy = serde_json::Map::new();
+	caddy.insert("http".into(), json!({ "servers": servers }));
+	if let Some((_, tls)) = private {
+		caddy.insert("tls".into(), tls);
+	}
 	json!({
 		"admin": { "listen": config.admin_listen, "config": { "persist": false } },
-		"apps": {
-			"http": { "servers": {
-				"private": {
-					"listen": [":443"],
-					"routes": lan,
-					"trusted_proxies": trusted,
-					"client_ip_headers": ["Cf-Connecting-Ip"]
-				},
-				"tunnel": {
-					"listen": [":80"],
-					"routes": [{
-						"match": [{ "host": [format!("*.{public}")] }],
-						"handle": [{ "handler": "subroute", "routes": outside }],
-						"terminal": true
-					}],
-					"errors": { "routes": [refused()] },
-					"trusted_proxies": trusted,
-					"client_ip_headers": ["Cf-Connecting-Ip"]
-				},
-				// Plain HTTP on a port no one outside Caddy's networks reaches, so no certificate.
-				"inside": {
-					"listen": [INSIDE_LISTEN],
-					"routes": inside_side(apps),
-					"automatic_https": { "disable": true }
-				}
-			}},
-			"tls": { "automation": { "policies": [{
-				"subjects": subjects,
-				"issuers": [{
-					"module": "acme",
-					"email": config.acme_email,
-					"challenges": { "dns": {
-						"provider": { "name": "cloudflare", "api_token": "{env.CLOUDFLARE_API_TOKEN}" },
-						"resolvers": [config.dns_resolver]
-					}}
-				}]
-			}]}}
-		}
+		"apps": caddy
 	})
 }
 
@@ -457,7 +493,7 @@ mod tests {
 
 	#[test]
 	fn the_inside_side_carries_every_scope_to_a_holder_of_the_token_alone() {
-		let rendered = render(&config(), &grants(), &[geo(), quota()], &[]);
+		let rendered = render(&config(), &grants(), &[geo(), quota()], &[], true);
 		let inside = &rendered["apps"]["http"]["servers"]["inside"];
 		assert_eq!(inside["listen"][0], ":8080");
 		assert_eq!(inside["automatic_https"]["disable"], true);
@@ -476,7 +512,7 @@ mod tests {
 
 	#[test]
 	fn a_scope_on_the_inside_side_alone_is_on_neither_api_host() {
-		let rendered = text(&render(&config(), &grants(), &[quota()], &[]));
+		let rendered = text(&render(&config(), &grants(), &[quota()], &[], true));
 		let servers =
 			serde_json::from_str::<Value>(&rendered).unwrap()["apps"]["http"]["servers"].clone();
 		assert!(!text(&servers["private"]).contains("/quota"));
@@ -486,9 +522,9 @@ mod tests {
 
 	#[test]
 	fn the_lan_hands_the_gateways_hostnames_to_the_internal_gateway_once_it_runs() {
-		let without = render(&config(), &grants(), &[geo()], &[]);
+		let without = render(&config(), &grants(), &[geo()], &[], true);
 		assert!(!text(&without).contains("monoflake"));
-		let with = render(&config(), &grants(), &[geo(), gateway()], &[]);
+		let with = render(&config(), &grants(), &[geo(), gateway()], &[], true);
 		let route = &with["apps"]["http"]["servers"]["private"]["routes"][0];
 		let hosts = &gateway().manifest.edge.unwrap().hosts;
 		assert_eq!(text(&route["match"][0]["host"]), text(&json!(hosts)));
@@ -505,7 +541,7 @@ mod tests {
 	fn an_api_scope_answers_on_both_api_hosts_regardless_of_its_public_flag() {
 		let mut private = geo();
 		private.manifest.api.as_mut().unwrap().public = false;
-		let rendered = text(&render(&config(), &grants(), &[private], &[]));
+		let rendered = text(&render(&config(), &grants(), &[private], &[], true));
 		assert!(rendered.contains(r#""host":["api.inside.test"]"#));
 		assert!(rendered.contains(r#""host":["api.outside.test"]"#));
 		assert!(rendered.contains(r#""path":["/geo","/geo/*"]"#));
@@ -521,7 +557,7 @@ mod tests {
 
 	#[test]
 	fn a_public_scope_is_on_the_tunnels_api_host_too() {
-		let rendered = render(&config(), &grants(), &[geo()], &[]);
+		let rendered = render(&config(), &grants(), &[geo()], &[], true);
 		let tunnel = &rendered["apps"]["http"]["servers"]["tunnel"]["routes"][0]["handle"][0]["routes"];
 		assert_eq!(tunnel[1]["match"][0]["host"][0], "api.outside.test");
 		assert_eq!(text(&rendered).matches(r#""dial":"geo:23440""#).count(), 3);
@@ -529,7 +565,7 @@ mod tests {
 
 	#[test]
 	fn a_limit_counts_what_the_gateway_forwards_on_the_tunnels_side_alone() {
-		let rendered = render(&config(), &grants(), &[geo()], &[]);
+		let rendered = render(&config(), &grants(), &[geo()], &[], true);
 		let servers = &rendered["apps"]["http"]["servers"];
 		let tunnel = &servers["tunnel"]["routes"][0]["handle"][0]["routes"][1]["handle"][0]["routes"];
 		let handle = &tunnel[1]["handle"];
@@ -559,7 +595,8 @@ mod tests {
 		let mut free = geo();
 		free.manifest.api.as_mut().unwrap().limits.clear();
 		assert!(
-			!text(&render(&config(), &grants(), &[free], &[])).contains(r#""handler":"rate_limit""#)
+			!text(&render(&config(), &grants(), &[free], &[], true))
+				.contains(r#""handler":"rate_limit""#)
 		);
 	}
 
@@ -596,13 +633,13 @@ mod tests {
 			}
 		}
 		let mut proxies = 0;
-		check(&render(&config(), &grants(), &[geo()], &[nas]), &mut proxies);
+		check(&render(&config(), &grants(), &[geo()], &[nas], true), &mut proxies);
 		assert!(proxies >= 3);
 	}
 
 	#[test]
 	fn the_source_guard_comes_first_on_both_sides() {
-		let rendered = render(&config(), &grants(), &[], &[]);
+		let rendered = render(&config(), &grants(), &[], &[], true);
 		let servers = &rendered["apps"]["http"]["servers"];
 		for (server, source) in [("private", "10.0.0.0/24"), ("tunnel", "172.30.0.20")] {
 			let first = &servers[server]["routes"][0]["handle"][0]["routes"][0];
@@ -619,7 +656,7 @@ mod tests {
 			public: true,
 			home: None,
 		};
-		let rendered = text(&render(&config(), &grants(), &[], &[nas]));
+		let rendered = text(&render(&config(), &grants(), &[], &[nas], true));
 		assert!(rendered.contains("nas.outside.test"));
 		assert!(!rendered.contains("nas.inside.test"));
 		// host is on neither: the panel is its only way in.
@@ -636,7 +673,7 @@ mod tests {
 			deployed_at: String::new(),
 			held: false,
 		};
-		let rendered = super::tests::text(&render(&config(), &grants(), &[gemini], &[]));
+		let rendered = super::tests::text(&render(&config(), &grants(), &[gemini], &[], true));
 		assert!(rendered.contains(r#""Location":["/admin"]"#));
 		assert_eq!(rendered.matches(r#""dial":"gemini:20830""#).count(), 2);
 	}
@@ -650,7 +687,7 @@ mod tests {
 			public: true,
 			home: Some("/admin".into()),
 		};
-		let rendered = text(&render(&config(), &grants(), &[], &[gemini]));
+		let rendered = text(&render(&config(), &grants(), &[], &[gemini], true));
 		assert!(rendered.contains(r#""match":[{"path":["/"]}]"#));
 		assert!(rendered.contains(r#""Location":["/admin"]"#));
 		assert!(rendered.contains(r#""status_code":307"#));
@@ -667,7 +704,7 @@ mod tests {
 			public: true,
 			home: None,
 		};
-		let rendered = text(&render(&config(), &grants(), &[], &[unifi]));
+		let rendered = text(&render(&config(), &grants(), &[], &[unifi], true));
 		assert!(rendered.contains(r#""dial":"device.test:443""#));
 		assert!(rendered.contains(r#""tls":{"insecure_skip_verify":true}"#));
 		assert_eq!(
@@ -705,7 +742,7 @@ mod tests {
 		// keeper's whole interface is on `.app` now, behind Access like any other -- not the one
 		// `/notice` path the Worker used to reach it by. See spec/architecture/host.md, "The private
 		// suffix is a mirror of part of `.app`, and nothing else".
-		let rendered = text(&render(&config(), &grants(), &[keeper], &[]));
+		let rendered = text(&render(&config(), &grants(), &[keeper], &[], true));
 		assert!(rendered.contains(r#"{"host":["keeper.outside.test"]}"#));
 		assert!(rendered.contains(r#"{"host":["keeper.inside.test"]}"#));
 		assert_eq!(rendered.matches(r#""dial":"keeper:11010""#).count(), 2);
@@ -715,8 +752,80 @@ mod tests {
 	fn the_render_is_the_same_for_the_same_state() {
 		// Stable output is what makes a diff of two renders mean something changed.
 		assert_eq!(
-			text(&render(&config(), &grants(), &[geo()], &[])),
-			text(&render(&config(), &grants(), &[geo()], &[]))
+			text(&render(&config(), &grants(), &[geo()], &[], true)),
+			text(&render(&config(), &grants(), &[geo()], &[], true))
 		);
+	}
+
+	/// Every side there is: a claimant, scopes on each side, and a route on both suffixes.
+	fn full(lan: bool) -> Value {
+		let nas = Route {
+			name: "nas".into(),
+			upstream: "10.0.0.21:80".into(),
+			private: true,
+			public: true,
+			home: Some("/admin".into()),
+		};
+		render(&config(), &grants(), &[geo(), quota(), gateway()], &[nas], lan)
+	}
+
+	#[test]
+	fn a_node_with_a_lan_renders_its_private_side_and_certificate_byte_for_byte() {
+		let rendered = full(true);
+		let private = concat!(
+			r#"{"client_ip_headers":["Cf-Connecting-Ip"],"listen":[":443"],"#,
+			r#""routes":[{"handle":[{"handler":"subroute","routes":[{"handle":[{"abort":true,"#,
+			r#""handler":"static_response"}],"#,
+			r#""match":[{"not":[{"remote_ip":{"ranges":["10.0.0.0/24"]}}]}]},"#,
+			r#"{"handle":[{"encodings":{"gzip":{},"zstd":{}},"handler":"encode","prefer":["zstd","#,
+			r#""gzip"]},{"handler":"reverse_proxy","#,
+			r#""headers":{"request":{"set":{"Cf-Connecting-Ip":["{http.vars.client_ip}"]}}},"#,
+			r#""upstreams":[{"dial":"gateway:26512"}]}]}]}],"match":[{"host":["*.monoflake.com","#,
+			r#""*.monoflake.net","*.ixc.one","ill.li","symlink.si"]}],"terminal":true},"#,
+			r#"{"handle":[{"handler":"subroute","routes":[{"handle":[{"abort":true,"#,
+			r#""handler":"static_response"}],"#,
+			r#""match":[{"not":[{"remote_ip":{"ranges":["10.0.0.0/24"]}}]}]},"#,
+			r#"{"handle":[{"handler":"subroute","routes":[{"handle":[{"handler":"static_response","#,
+			r#""status_code":400}],"match":[{"path":["/"]}]},{"handle":[{"handler":"rewrite","#,
+			r#""strip_path_prefix":"/geo"},{"encodings":{"gzip":{},"zstd":{}},"handler":"encode","#,
+			r#""prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
+			r#""upstreams":[{"dial":"geo:23440"}]}],"match":[{"path":["/geo","/geo/*"]}]},"#,
+			r#"{"handle":[{"handler":"static_response","status_code":404}]}]}],"#,
+			r#""match":[{"host":["api.inside.test"]}]},{"handle":[{"handler":"subroute","#,
+			r#""routes":[{"handle":[{"handler":"static_response","headers":{"Location":["/admin"]},"#,
+			r#""status_code":307}],"match":[{"path":["/"]}]},{"handle":[{"encodings":{"gzip":{},"#,
+			r#""zstd":{}},"handler":"encode","prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
+			r#""upstreams":[{"dial":"10.0.0.21:80"}]}]}]}],"match":[{"host":["nas.inside.test"]}]},"#,
+			r#"{"handle":[{"abort":true,"handler":"static_response"}]}]}],"#,
+			r#""match":[{"host":["*.inside.test"]}],"terminal":true}],"#,
+			r#""trusted_proxies":{"ranges":["172.30.0.20"],"source":"static"}}"#,
+		);
+		assert_eq!(text(&rendered["apps"]["http"]["servers"]["private"]), private);
+		let tls = concat!(
+			r#"{"automation":{"policies":[{"issuers":[{"challenges":{"dns":"#,
+			r#"{"provider":{"api_token":"{env.CLOUDFLARE_API_TOKEN}","#,
+			r#""name":"cloudflare"},"resolvers":["1.1.1.1"]}},"email":"someone@example.com","#,
+			r#""module":"acme"}],"subjects":["*.inside.test","*.monoflake.com","*.monoflake.net","#,
+			r#""*.ixc.one","ill.li","symlink.si"]}]}}"#,
+		);
+		assert_eq!(text(&rendered["apps"]["tls"]), tls);
+	}
+
+	#[test]
+	fn a_node_with_no_lan_asks_for_no_certificate() {
+		let without = full(false);
+		let servers = &without["apps"]["http"]["servers"];
+		assert!(servers.get("private").is_none() && without["apps"].get("tls").is_none());
+		let rendered = text(&without);
+		assert!(!rendered.contains(":443") && !rendered.contains("CLOUDFLARE_API_TOKEN"));
+		// The claimant's names were only ever on the private side.
+		assert!(!rendered.contains("monoflake"));
+		assert_eq!(servers["tunnel"]["listen"][0], ":80");
+		assert_eq!(servers["inside"]["listen"][0], ":8080");
+		// Everything else is what a node with a LAN renders.
+		let mut with = full(true);
+		with["apps"]["http"]["servers"].as_object_mut().unwrap().remove("private");
+		with["apps"].as_object_mut().unwrap().remove("tls");
+		assert_eq!(rendered, text(&with));
 	}
 }

@@ -735,7 +735,8 @@ async fn apply_resolver(host: &Host) -> Result<(), RouteError> {
 
 pub fn render(host: &Host) -> Result<serde_json::Value, store::Error> {
 	let (apps, routes) = (host.store.apps()?, host.store.routes()?);
-	Ok(caddy::render(&host.config.caddy, &host.config.grants, &apps, &routes))
+	let lan = host.config.resolver.address.is_some();
+	Ok(caddy::render(&host.config.caddy, &host.config.grants, &apps, &routes, lan))
 }
 
 /// Attach Caddy and host to every app's network again. A Caddy container that was recreated
