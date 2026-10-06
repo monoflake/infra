@@ -20,8 +20,10 @@ use tokio::io::AsyncWriteExt;
 pub const WORKFLOW: &str = ".github/workflows/deploy.yml";
 /// What may have started it. A pull request never does, and would not count if it did.
 const EVENTS: [&str; 3] = ["push", "schedule", "workflow_dispatch"];
-/// How an artifact carrying an app's image is named: `deploy-geo`.
+/// How an artifact carrying an app's image is named: `deploy-geo-arm64`.
 const PREFIX: &str = "deploy-";
+/// The architectures CI builds for, spelled as Docker's `TARGETARCH` spells them.
+const ARCHES: [&str; 2] = ["arm64", "amd64"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -86,6 +88,7 @@ struct Record {
 #[derive(Debug, Clone)]
 pub struct Artifact {
 	pub app: String,
+	pub arch: &'static str,
 	repository: String,
 	id: u64,
 	digest: String,
@@ -108,13 +111,32 @@ pub struct Fetched {
 	pub declaration: String,
 }
 
-/// The app an artifact name carries, when the name is one CI gives and the app a name an app can
-/// have. The name comes from GitHub's answer, not from this repository, so it is held to the
-/// same rule as any other name before anything is done with it.
-pub fn app_of(artifact: &str) -> Option<String> {
-	let app = artifact.strip_prefix(PREFIX)?;
+/// The architecture this node runs, spelled as an artifact name spells it. None for any other,
+/// which then matches no artifact.
+pub fn node_arch() -> Option<&'static str> {
+	arch_of(std::env::consts::ARCH)
+}
+
+fn arch_of(arch: &str) -> Option<&'static str> {
+	match arch {
+		"aarch64" => Some("arm64"),
+		"x86_64" => Some("amd64"),
+		_ => None,
+	}
+}
+
+/// The app and architecture an artifact name carries, when the name is one CI gives and the app a
+/// name an app can have. The name comes from GitHub's answer, not from this repository, so it is
+/// held to the same rule as any other name before anything is done with it.
+pub fn app_of(artifact: &str) -> Option<(String, &'static str)> {
+	let rest = artifact.strip_prefix(PREFIX)?;
+	let (app, arch) = ARCHES
+		.iter()
+		.find_map(|arch| Some((rest.strip_suffix(arch)?.strip_suffix('-')?, *arch)))
+		// The legacy name, `deploy-geo`; it goes once CI names every artifact with its arch.
+		.unwrap_or((rest, "arm64"));
 	let named = crate::manifest::check_name(app).is_ok() || crate::manifest::OWN.contains(&app);
-	named.then(|| app.to_owned())
+	named.then(|| (app.to_owned(), arch))
 }
 
 /// Whether `record` is a finished, successful run of `repository`'s deploy workflow on `main`.
@@ -216,13 +238,16 @@ impl GitHub {
 			.into_iter()
 			.filter(|record| !record.expired)
 			.filter_map(|record| {
+				let (app, arch) = app_of(&record.name)?;
 				Some(Artifact {
-					app: app_of(&record.name)?,
+					app,
+					arch,
 					repository: repository.to_owned(),
 					id: record.id,
 					digest: record.digest?,
 				})
 			})
+			.filter(|artifact| Some(artifact.arch) == node_arch())
 			.collect();
 		Ok(Built { commit: record.head_sha, artifacts })
 	}
@@ -346,13 +371,30 @@ mod tests {
 
 	#[test]
 	fn an_artifact_names_an_app_only_when_the_name_could_be_one() {
-		assert_eq!(app_of("deploy-geo").as_deref(), Some("geo"));
-		assert_eq!(app_of("deploy-host").as_deref(), Some("host"));
-		assert_eq!(app_of("deploy-keeper").as_deref(), Some("keeper"));
+		let of = app_of;
+		let found = |app: &str, arch: &'static str| Some((app.to_owned(), arch));
+		assert_eq!(of("deploy-geo-arm64"), found("geo", "arm64"));
+		assert_eq!(of("deploy-geo-amd64"), found("geo", "amd64"));
+		assert_eq!(of("deploy-host-amd64"), found("host", "amd64"));
+		assert_eq!(of("deploy-keeper-arm64"), found("keeper", "arm64"));
+		assert_eq!(of("deploy-geo"), found("geo", "arm64"));
+		assert_eq!(of("deploy-host"), found("host", "arm64"));
+		assert_eq!(of("deploy-my-app-amd64"), found("my-app", "amd64"));
+		assert_eq!(of("deploy-my-app"), found("my-app", "arm64"));
 		// A name from GitHub's answer never reaches a path, but it is refused before it could.
-		assert_eq!(app_of("deploy-../../etc"), None);
-		assert_eq!(app_of("deploy-api"), None);
-		assert_eq!(app_of("other-geo"), None);
+		assert_eq!(of("deploy-../../etc"), None);
+		assert_eq!(of("deploy-../../etc-arm64"), None);
+		assert_eq!(of("deploy--arm64"), None);
+		assert_eq!(of("deploy-api"), None);
+		assert_eq!(of("other-geo-arm64"), None);
+		assert_eq!(of("other-geo"), None);
+	}
+
+	#[test]
+	fn a_node_takes_the_architecture_its_cpu_names() {
+		assert_eq!(arch_of("aarch64"), Some("arm64"));
+		assert_eq!(arch_of("x86_64"), Some("amd64"));
+		assert_eq!(arch_of("riscv64"), None);
 	}
 
 	#[test]

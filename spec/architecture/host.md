@@ -86,7 +86,8 @@ channel that accepts one has no boundary to enforce.
 So the direction is reversed, and trust is moved off the channel.
 
 - CI builds only the apps a push changed -- `.mise/tasks/deployable` reads the change against the
-  crate graph -- for `linux/arm64`, each as its image archive beside its `service.toml`, and uploads
+  crate graph -- once for `linux/arm64` and once for `linux/amd64`, each natively on a runner of that
+  architecture and each as its image archive beside its `service.toml`, and uploads
   them as artifacts of that workflow run. **Nothing is published**: no release, no package, no
   registry. This is one repository holding many apps, and a publishing ritual per app is exactly the
   cost that stops small apps being written. The build is `.mise/tasks/image`, the same one a local
@@ -101,7 +102,8 @@ So the direction is reversed, and trust is moved off the channel.
 - host asks GitHub about that run with `GITHUB_ACTIONS_TOKEN`, a fine-grained token owned by the
   monoflake organization with Actions read on its sources, and **runs nothing unless the answer is
   one of its sources' `.github/workflows/deploy.yml`, on `main`, finished and successful** -- the
-  one path `libs/deploy`'s `WORKFLOW` accepts; then downloads the artifact and checks it against the digest GitHub recorded. The
+  one path `libs/deploy`'s `WORKFLOW` accepts; then downloads the artifact built for its own
+  architecture, `deploy-<app>-<arch>` with `arm64` or `amd64`, and leaves the other; it checks the one it took against the digest GitHub recorded. The
   notice is a hint, not an authority: a forged one can at worst redeploy what `main` already built.
 - **A node's sources are its own to name**, in `DEPLOY_SOURCES` in the node's `.env`, as
   `owner/name` pairs: a run is numbered within its repository, so a notice names the repository
@@ -123,7 +125,8 @@ root to verify in Rust, the most intricate code on the path for no guarantee the
 An artifact expires after its retention period. That does not matter to a deploy, since the image is
 on the machine once loaded, and a rollback uses the image host kept.
 
-A local deploy is `wrangler deploy`'s shape: built on the Mac, which is arm64 like the machine, into
+A local deploy is `wrangler deploy`'s shape: built on the Mac, which is arm64 like the machine at home -- `PLATFORM=linux/amd64` builds for an
+x86 node -- into
 the same archive, and uploaded by a mise task to an interface that answers only on the LAN and the
 tailnet. What admits it is the token below, not an attestation. So there is one artifact format with
 two sources, and no registry anywhere.
