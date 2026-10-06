@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 #MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, or start its first host: `node host <name> [--run RUN_ID] [--dry-run]`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
-/data, the egress proxy and the firewall. Run again it changes nothing. See
-spec/architecture/nodes.md.
+/data, the egress proxy, the firewall and what the relay peer reads. Run again it changes
+nothing. See spec/architecture/nodes.md.
 
 `node host <name>` starts the first host on a node set up that way and hands it a CI run, from
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
@@ -150,6 +150,63 @@ mv "$file.new" "$file"
 echo written
 """
 
+# What the relay app, a peer on every node, is given. Its port is `port` in its service.toml in the
+# platform; the role is granted in host's `GRANTS`. See spec/architecture/host.md, "A role is asked
+# for by the app and granted by the node".
+RELAY_PORT = 12012
+RELAY_GRANT = "relay:peer"
+# The secrets every node shares, in secrets.json under these names.
+RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
+
+# Runs on the node with RELAY_SECRET, HOST_READ_TOKEN and RELAY_PEERS on stdin, a line each. Values
+# travel by stdin and environment only, never argv. A file is replaced only when its content
+# differs, and what it holds besides the keys named is kept. Prints `secret <state>` and
+# `host <state>`, a state being current, changed or absent.
+RELAY = r"""set -eu
+umask 077
+read -r secret
+read -r token
+read -r peers
+upsert() {
+	file=$1
+	shift
+	cp -p "$file" "$file.new" 2>/dev/null || : > "$file.new"
+	for pair in "$@"; do
+		K=${pair%%=*} V=${pair#*=} awk 'BEGIN { k = ENVIRON["K"]; v = ENVIRON["V"] }
+			index($0, k "=") == 1 { if (!d) print k "=" v; d = 1; next }
+			{ print }
+			END { if (!d) print k "=" v }' "$file.new" > "$file.tmp"
+		mv "$file.tmp" "$file.new"
+	done
+	if [ -f "$file" ] && cmp -s "$file.new" "$file"; then
+		rm -f "$file.new"
+		echo current
+	else
+		chown root:root "$file.new"
+		chmod 600 "$file.new"
+		mv "$file.new" "$file"
+		echo changed
+	fi
+}
+mountpoint -q /data || { echo "/data is not mounted" >&2; exit 1; }
+mkdir -p /data/apps
+dir=/data/apps/relay
+[ -d "$dir" ] || btrfs subvolume create "$dir" >/dev/null
+chmod 700 "$dir"
+echo "secret $(upsert "$dir/secret.env" "RELAY_SECRET=$secret" "HOST_READ_TOKEN=$token" "RELAY_PEERS=$peers")"
+file=/data/apps/host/.env
+if [ -f "$file" ]; then
+	current=$(sed -n 's/^GRANTS=//p' "$file" | tail -n 1)
+	case " $current " in
+		*" relay:peer "*) grants=$current ;;
+		*) grants="${current:+$current }relay:peer" ;;
+	esac
+	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants")"
+else
+	echo "host absent"
+fi
+"""
+
 WAIT = rf"""i=0
 until [ "$(docker inspect -f '{{{{.State.Running}}}}' host 2>/dev/null)" = true ]; do
 	i=$((i + 1))
@@ -214,14 +271,20 @@ def proxy_addresses(nodes):
 	"""Each proxy node's tailnet IPv4, in nodes.toml order with the home tier last."""
 	proxies = [name for name, node in nodes.items() if node.get("ipv4", True)]
 	proxies.sort(key=lambda name: nodes[name]["tier"] == "home")
-	urls = []
-	for name in proxies:
-		found = subprocess.run(["tailscale", "ip", "-4", name], text=True, stdout=subprocess.PIPE)
-		address = found.stdout.split()[0] if found.returncode == 0 and found.stdout.split() else None
-		if address is None:
-			sys.exit(f"node: tailscale has no IPv4 for {name}")
-		urls.append(f"http://{address}:{PROXY_PORT}")
-	return urls
+	return [f"http://{tailnet_ipv4(name)}:{PROXY_PORT}" for name in proxies]
+
+
+def tailnet_ipv4(name):
+	found = subprocess.run(["tailscale", "ip", "-4", name], text=True, stdout=subprocess.PIPE)
+	address = found.stdout.split()[0] if found.returncode == 0 and found.stdout.split() else None
+	if address is None:
+		sys.exit(f"node: tailscale has no IPv4 for {name}")
+	return address
+
+
+def relay_peers(nodes):
+	"""Every node's relay by its tailnet address, in nodes.toml order; a relay skips its own."""
+	return " ".join(f"{name}={tailnet_ipv4(name)}:{RELAY_PORT}" for name in nodes)
 
 
 def encoded(text):
@@ -312,7 +375,11 @@ def newest_run(arch):
 
 def host_token(name, dry):
 	"""HOST_TOKEN_<NAME> from secrets.json, made and stored there first when it is not."""
-	key = f"HOST_TOKEN_{name.upper()}"
+	return stored_secret(f"HOST_TOKEN_{name.upper()}", dry)
+
+
+def stored_secret(key, dry):
+	"""`key` from secrets.json, made and stored there first when it is not."""
 	if os.environ.get(key):
 		print(f"node: {key} is read from secrets.json")
 		return os.environ[key]
@@ -332,12 +399,40 @@ def host_token(name, dry):
 	return token
 
 
-def environment(name, token):
-	"""host's `.env`. LAN_ADDRESS, RESOLVER_UPSTREAMS and GRANTS are left out: a cloud node has no
-	LAN, runs no resolver, and grants nothing."""
+def relay(where, name, peers, secrets_, dry):
+	"""Gives the relay peer what it reads on one node. False when the node could not be given it."""
+	if dry:
+		print(
+			f"node: {name}: would, on root@{where}:\n"
+			"  make the subvolume /data/apps/relay unless it is there, mode 700\n"
+			"  write /data/apps/relay/secret.env, mode 600, if it differs: RELAY_SECRET=<redacted>\n"
+			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
+			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
+			f"    and {RELAY_GRANT} added to GRANTS, the pairs already there kept"
+		)
+		return True
+	stdin = f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
+	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
+	if answer is None:
+		print(f"node: {name}: giving the relay its secrets failed")
+		return False
+	states = dict(line.split(" ", 1) for line in answer.splitlines())
+	print(f"node: {name}: relay secret.env {states.get('secret')}")
+	if states.get("host") == "changed":
+		print(f"node: {name}: host's .env changed; host needs recreating to read it")
+	elif states.get("host") == "absent":
+		print(f"node: {name}: host has no .env yet; run again after `node host {name}`")
+	return True
+
+
+def environment(name, token, read_token):
+	"""host's `.env`. LAN_ADDRESS and RESOLVER_UPSTREAMS are left out: a cloud node has no LAN and
+	runs no resolver. It grants the relay's peer role and nothing else."""
 	values = {
 		"NODE": name,
 		"HOST_TOKEN": token,
+		"HOST_READ_TOKEN": read_token,
+		"GRANTS": RELAY_GRANT,
 		"PRIVATE_SUFFIX": PRIVATE_SUFFIX,
 		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
 		"PRIVATE_SOURCES": PRIVATE_SOURCES,
@@ -370,6 +465,8 @@ def start_host(name, run, dry):
 		run = "RUN_ID"
 	print(f"node: host on {name}, {arch}, from run {run} of {REPOSITORY}")
 	token = host_token(name, dry)
+	shared = {key: stored_secret(key, dry) for key in RELAY_SECRETS}
+	peers = relay_peers(tomllib.loads((NODES / "nodes.toml").read_text()))
 	notice = json.dumps({"run": run, "repository": REPOSITORY, "host_replaced": True})
 	if dry:
 		print(
@@ -382,10 +479,12 @@ def start_host(name, run, dry):
 			f"  write /data/apps/host/.env, mode 600: NODE={name} PRIVATE_SUFFIX={PRIVATE_SUFFIX}\n"
 			f"    PUBLIC_SUFFIX={PUBLIC_SUFFIX} PRIVATE_SOURCES={PRIVATE_SOURCES}\n"
 			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
-			f"    and HOST_TOKEN_{name.upper()} as HOST_TOKEN, ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
+			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN, GRANTS={RELAY_GRANT},\n"
+			"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
 		)
+		relay(name, name, peers, shared, dry)
 		return
 
 	if ssh(name, "sh -s", PREPARE) != 0:
@@ -415,8 +514,10 @@ def start_host(name, run, dry):
 
 	if not put(name, "/data/apps/host/docker-compose.yml", COMPOSE.read_text(), "644"):
 		sys.exit(f"node: writing host's docker-compose.yml on {name} failed")
-	if not put(name, "/data/apps/host/.env", environment(name, token), "600"):
+	if not put(name, "/data/apps/host/.env", environment(name, token, shared["HOST_READ_TOKEN"]), "600"):
 		sys.exit(f"node: writing host's .env on {name} failed")
+	if not relay(name, name, peers, shared, dry):
+		sys.exit(f"node: giving the relay its secrets on {name} failed")
 	if ssh(name, "cd /data/apps/host && docker compose up -d") != 0:
 		sys.exit(f"node: starting host on {name} failed")
 	if ssh(name, "sh -s", WAIT) != 0:
@@ -460,12 +561,16 @@ def main():
 		sys.exit(f"node: name one of {', '.join(nodes)} or --all; --address takes one")
 
 	proxies = proxy_addresses(nodes) if any(not nodes[n].get("ipv4", True) for n in names) else []
+	# Made once, before the loop, or each node would be given a value of its own.
+	shared = {key: stored_secret(key, dry) for key in RELAY_SECRETS}
+	peers = relay_peers(nodes)
 	failed = []
 	for name in names:
 		node = nodes[name]
 		where = address or name
 		if dry:
 			print(f"# node {name}, {node['system']}, at root@{where}\n{script(name, node, proxies)}")
+			relay(where, name, peers, shared, dry)
 			continue
 		print(f"node: {name} at root@{where}")
 		if ssh(where, "sh -s", script(name, node, proxies)) != 0:
@@ -474,6 +579,9 @@ def main():
 		# A new session, over the tailnet, is what the firewall has to let through.
 		if ssh(where, "touch /run/node-firewall.ok") != 0:
 			print(f"node: {name} refused a second session; its firewall comes down in {GUARD_SECONDS}s")
+			failed.append(name)
+			continue
+		if not relay(where, name, peers, shared, dry):
 			failed.append(name)
 			continue
 		print(f"node: {name} is set up")

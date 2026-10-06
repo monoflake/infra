@@ -104,9 +104,11 @@ until host deploys it.
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.
 
-**What every node runs is host, keeper, the panel, Caddy, the tunnel and the meter.** The panel is
+**What every node runs is host, keeper, the panel, Caddy, the tunnel, the meter and the relay.** The panel is
 on every node because CI's notice reaches host through it, on the panel's own name; the resolver
-answers the house's LAN and stays on the node that has one.
+answers the house's LAN and stays on the node that has one. `mise run node` gives the relay what it
+reads -- `RELAY_SECRET`, `HOST_READ_TOKEN` and `RELAY_PEERS` in its `secret.env`, the read token and
+`relay:peer` in host's `.env` -- both shared secrets made once, in the repository's secrets.
 
 **Each node's host has a token of its own**, `HOST_TOKEN_<NAME>` in the repository's secrets, made
 the first time the node is brought up: the token is root on its machine, so one leaked stays one
