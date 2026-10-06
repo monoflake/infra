@@ -112,8 +112,7 @@ fn a_container_answers_on_a_port_or_a_socket() {
 #[test]
 fn a_node_refuses_a_service_with_no_container() {
 	let manifest =
-		Manifest::parse("version = 1\nname = \"edge\"\nplacements = [\"workers\", \"rdu\"]\n")
-			.unwrap();
+		Manifest::parse("version = 1\nname = \"edge\"\nplacements = [\"workers\", \"rdu\"]\n").unwrap();
 	assert_eq!(manifest.check("edge", "rdu"), Err(Invalid::NoContainer("edge".into())));
 }
 
