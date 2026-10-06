@@ -14,5 +14,6 @@ calls it -- [architecture/host.md](architecture/host.md), "The machine pulls; no
 it". GitHub does not deliver a webhook again on its own, so a node that was down then never learns
 of the run, and keeps the version before it until the next push to the same app. With a node that
 is allowed to go offline -- [architecture/nodes.md](architecture/nodes.md), `home` -- that is no
-longer rare. host could ask GitHub, when it starts, for each source's latest successful run and take
-what it has not; how far back it looks, and whether keeper does the same for host, is undecided.
+longer rare. The direction is the relay's ordered log, which a node that was away catches up on by
+comparing its place with any neighbor's -- platform's `spec/architecture/relay.md`. Whether host
+also asks GitHub on start, until the relay exists, is undecided.

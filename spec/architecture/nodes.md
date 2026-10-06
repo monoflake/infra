@@ -116,8 +116,19 @@ machine. The token GitHub's Actions are read with is shared, since it can only r
 
 What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml), and nowhere else.
 
-**`gvx` and `bru` have no public IPv4**, inbound or, from late 2026, outbound. What only IPv4 reaches
--- GitHub's API, from which host takes every build, and `ghcr.io` -- reaches them through a proxy on
-a node that has it, over the tailnet, which runs on IPv6: an app of the platform's, set as
-`HTTPS_PROXY` for host and dockerd alone. Rejected: a tailnet exit node, which needs no code but
-carries all of their traffic.
+**`gvx` and `bru` have no public IPv4**, inbound or, from late 2026, outbound -- `ipv4 = false` in
+`nodes.toml`. On such a node only one thing needs IPv4: host and keeper asking GitHub for a run and
+downloading what it built. Images arrive as archives, never pulled from a registry, and the tunnel,
+the tailnet and the package mirrors all speak IPv6.
+
+**Every node with IPv4 runs an egress proxy, and a node without it asks them in turn.** tinyproxy, set
+up by `mise run node`, listening on the node's tailnet address alone and passing on HTTPS to
+GitHub's names and nothing else. A node with `ipv4 = false` gives host and keeper `EGRESS_PROXIES`,
+every such proxy by its tailnet address, and `libs/deploy`'s GitHub client tries them in order. The
+tailnet is what makes this work: it carries IPv4 between nodes over an IPv6 path, so a container
+with IPv4 alone reaches a proxy at a `100.x` address on a machine with no IPv4 of its own.
+
+Rejected: **NAT64 with DNS64**, which needs IPv6 inside every container, and Docker's bridges have
+none; and **a tailnet exit node**, which sends all of a node's traffic through one other machine.
+A proxy is a stopgap rather than the end: once nodes fetch what CI built from each other --
+platform's `spec/architecture/relay.md` -- a node without IPv4 needs no GitHub at all.

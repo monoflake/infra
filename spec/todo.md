@@ -10,8 +10,10 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   empty list -- [architecture/host.md](architecture/host.md).
 - **The panel draws what host's inspect routes answer**: a file manager and a view of containers --
   [architecture/inspect.md](architecture/inspect.md).
-- **The egress proxy for `gvx` and `bru`**, before their IPv4 egress ends --
-  [architecture/nodes.md](architecture/nodes.md), "The nodes".
+- **The egress proxies, and `EGRESS_PROXIES` in `libs/deploy`'s GitHub client**, before `gvx` and
+  `bru` lose IPv4 -- [architecture/nodes.md](architecture/nodes.md), "The nodes".
+- **A shape that opens a port on the node's tailnet address alone**, which the relay needs --
+  platform's `spec/architecture/relay.md`.
 - **`app_of` stops reading a bare `deploy-<app>` as arm64** once no run that still names its
   artifacts that way is fresh enough to deploy -- [architecture/host.md](architecture/host.md),
   "The machine pulls; nothing pushes into it".
