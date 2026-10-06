@@ -4,6 +4,7 @@
 //! container is replaced. See spec/architecture/host.md.
 
 pub mod btrfs;
+pub mod egress;
 pub mod engine;
 pub mod github;
 pub mod http;

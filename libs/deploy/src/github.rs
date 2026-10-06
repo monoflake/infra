@@ -3,12 +3,12 @@
 //! hint; this is where it becomes a decision. See spec/architecture/host.md, "The machine pulls;
 //! nothing pushes into it".
 
+use crate::egress::{self, Egress};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
 use hyper::Request;
 use hyper::body::Incoming;
 use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -161,7 +161,7 @@ pub fn check(run: u64, record: &Run, repository: &str) -> Result<(), Error> {
 }
 
 pub struct GitHub {
-	client: Client<hyper_rustls::HttpsConnector<HttpConnector>, Empty<Bytes>>,
+	client: Client<hyper_rustls::HttpsConnector<Egress>, Empty<Bytes>>,
 	/// The repositories this node deploys from; a run of any other is refused before it is read.
 	sources: Vec<String>,
 	token: String,
@@ -169,17 +169,18 @@ pub struct GitHub {
 
 impl GitHub {
 	/// Roots compiled in rather than read from the system: an image built from scratch has none.
-	pub fn new(token: String, sources: Vec<String>) -> Self {
+	pub fn new(token: String, sources: Vec<String>, egress: Egress) -> Self {
 		let https = hyper_rustls::HttpsConnectorBuilder::new()
 			.with_webpki_roots()
 			.https_only()
 			.enable_http1()
-			.build();
+			.wrap_connector(egress);
 		Self { client: Client::builder(TokioExecutor::new()).build(https), sources, token }
 	}
 
-	/// The client a node's environment configures: its token, and the sources it deploys from. None
-	/// without both, and then the node refuses CI's notices rather than guessing a repository.
+	/// The client a node's environment configures: its token, the sources it deploys from, and the
+	/// egress proxies it leaves through. None without the first two or with a proxy it cannot read,
+	/// and then the node refuses CI's notices rather than guessing a repository or a way out.
 	pub fn from_env() -> Option<Self> {
 		let token = std::env::var("GITHUB_ACTIONS_TOKEN").ok().filter(|token| !token.is_empty())?;
 		let sources = sources(&std::env::var("DEPLOY_SOURCES").unwrap_or_default());
@@ -187,7 +188,10 @@ impl GitHub {
 			eprintln!("deploy: DEPLOY_SOURCES names no repository, so no run is deployed");
 			return None;
 		}
-		Some(Self::new(token, sources))
+		let proxies = egress::proxies(&std::env::var("EGRESS_PROXIES").unwrap_or_default());
+		let proxies =
+			proxies.inspect_err(|error| eprintln!("deploy: {error}, so no run is deployed")).ok()?;
+		Some(Self::new(token, sources, Egress::new(proxies)))
 	}
 
 	/// The repository a notice that names none is about: the one source, when there is one. A
@@ -209,7 +213,7 @@ impl GitHub {
 			request = request.header("authorization", format!("Bearer {}", self.token));
 		}
 		let request = request.body(Empty::new()).map_err(|e| Error::Http(e.to_string()))?;
-		self.client.request(request).await.map_err(|e| Error::Http(e.to_string()))
+		self.client.request(request).await.map_err(|e| Error::Http(egress::chain(&e)))
 	}
 
 	async fn json<T: DeserializeOwned>(&self, repository: &str, path: &str) -> Result<T, Error> {
@@ -363,9 +367,9 @@ mod tests {
 	fn the_sources_are_the_owner_and_name_pairs_the_node_lists() {
 		assert_eq!(sources(" canmi21/web\tmonoflake/infra \n"), ["canmi21/web", "monoflake/infra"]);
 		assert!(sources("infra a/b/c").is_empty());
-		let one = GitHub::new(String::new(), sources("monoflake/infra"));
+		let one = GitHub::new(String::new(), sources("monoflake/infra"), Egress::new(Vec::new()));
 		assert_eq!(one.only_source(), Some("monoflake/infra"));
-		let two = GitHub::new(String::new(), sources("a/b c/d"));
+		let two = GitHub::new(String::new(), sources("a/b c/d"), Egress::new(Vec::new()));
 		assert_eq!(two.only_source(), None);
 	}
 
