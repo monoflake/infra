@@ -17,13 +17,12 @@ ROOT = Path(__file__).resolve().parents[2]
 NODES = ROOT / "nodes"
 ACCOUNT = "62163885eb1943e6561e004ac10a5f22"
 API = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}"
-# Wired by hand under other names (nanopi, home), so this task leaves it alone.
-WIRED = {"rdu"}
 
 # Runs on the node with the token on stdin. A btrfs subvolume, since host snapshots each app's.
 REMOTE = r"""set -eu
 dir=/data/apps/tunnel
 file=$dir/secret.env
+mkdir -p /data/apps
 [ -d "$dir" ] || btrfs subvolume create "$dir" >/dev/null
 chmod 700 "$dir"
 read -r token
@@ -149,9 +148,6 @@ def main():
 
 	ids = {}
 	for name in names:
-		if name in WIRED:
-			print(f"tunnel: {name} is wired already")
-			continue
 		ids[name] = wire(name, dry)
 	print(json.dumps(ids, indent=2))
 

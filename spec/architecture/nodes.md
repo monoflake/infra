@@ -100,6 +100,10 @@ node's `.env`, and hands it that run, so host deploys the rest. It hands the run
 already passed on: a run that rebuilt host makes host wait for keeper, and a fresh node has none
 until host deploys it.
 
+**The tunnel comes first.** host deploys the tunnel in the run it is handed, and a first deploy
+that fails leaves nothing behind -- the app's directory goes with it, a token placed there
+included -- so the token has to be on the node before host starts.
+
 **What every node runs is host, keeper, Caddy, the tunnel and the meter.** The panel and the
 resolver answer the house's LAN and stay on the node that has one.
 
