@@ -206,7 +206,12 @@ own rather than `release`, which a local release build would otherwise inherit a
 **A Rust program's image is the binary on `scratch` and nothing else.** Each is linked statically against
 musl, so it needs no C library from the image, and the image holds the binary and, for geo, its
 data. musl's own allocator is slow under many small allocations, so every program sets mimalloc as
-its allocator; without it the static binary would be the slower one. host and keeper make btrfs's
+its allocator; without it the static binary would be the slower one. **mimalloc is compiled with
+transparent huge pages off**, `-DMI_DEFAULT_ALLOW_THP=0` in each image's build: left on, it asks the
+kernel for 2 MiB pages, and every 2 MiB its heaps touch then stays resident whole, which held geo at
+40 to 55 MB of memory around a heap of 2.5 MB on 2026-10-07, against a ceiling of 64. Off, mimalloc
+also turns the pages off for the process, which a node whose kernel uses them always needs; set at
+compile time, it holds for a binary run outside its image too. host and keeper make btrfs's
 ioctls themselves rather than running `btrfs`, which is what let them leave Debian: there is no
 `btrfs` in an empty image, and no command line to inject into once there is no command. The
 target follows the platform being built, so the same Dockerfile serves an x86 node.
