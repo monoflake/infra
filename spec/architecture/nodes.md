@@ -167,9 +167,9 @@ more -- what the meter reports is the record, and a machine that changes leaves 
 
 | Node  | Account  | CPU                                    | vCPUs | Instruction set                                      | Memory  |
 | ----- | -------- | -------------------------------------- | ----- | ---------------------------------------------------- | ------- |
-| `tyo` | OCI      | Arm Neoverse N1                        | 4     | ARMv8.2: LSE atomics, dot product, CRC32, AES, SHA-2 | 23 GiB  |
-| `nrt` | OCI      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
-| `hnd` | OCI      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `tyo` | Oracle   | Arm Neoverse N1                        | 4     | ARMv8.2: LSE atomics, dot product, CRC32, AES, SHA-2 | 23 GiB  |
+| `nrt` | Oracle   | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `hnd` | Oracle   | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
 | `gvx` | Azure    | Arm Neoverse N1                        | 2     | ARMv8.2, as `tyo`                                    | 970 MiB |
 | `bru` | Azure    | AMD EPYC 7763, Zen 3                   | 2     | x86-64-v3, AES-NI, SHA-NI                            | 898 MiB |
 | `buf` | RackNerd | Intel Xeon E5-2690 v4, Broadwell       | 2     | x86-64-v3, AES-NI, no SHA-NI; emulates arm64         | 3.3 GiB |
