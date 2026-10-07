@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 	}
 
 	// What was running keeps running whatever happens here; these only put Caddy back in step with
-	// the state. A failure is reported and serving goes on, since the panel is how it is fixed.
+	// the state. A failure is reported and serving goes on, since host's API is how it is fixed.
 	if let Err(error) = rollout::attach(&host).await {
 		eprintln!("host: attaching networks: {error}");
 	}
@@ -98,9 +98,10 @@ async fn main() -> anyhow::Result<()> {
 		}
 	});
 
-	// On the node, only on host's own network, which the panel and keeper share and Caddy does not:
-	// every app's network host joins to check health leaves its port unreachable from there. See
-	// spec/architecture/host.md, "The panel is an app of its own".
+	// On the node, only on host's own network, which keeper, a peer and Caddy share, Caddy for its
+	// allowlist alone: every app's network host joins to check health leaves its port unreachable
+	// from there. See spec/architecture/host.md, "host has no interface on the node, and a door
+	// Caddy keeps".
 	let mut listen = host.config.listen;
 	if std::env::var_os("LISTEN").is_none() {
 		let network = deploy::engine::network_of(&host.config.own_container);

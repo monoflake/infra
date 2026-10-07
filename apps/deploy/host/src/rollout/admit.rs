@@ -9,25 +9,22 @@ use deploy::Shape;
 use deploy::manifest::{Invalid, Manifest};
 
 /// Whether host takes a deploy under this name at all: any app's, and keeper, the meter, Caddy, the
-/// tunnel and the panel, the reserved names it deploys. host itself is keeper's to deploy.
+/// tunnel and the resolver, the reserved names it deploys. host itself is keeper's to deploy.
 pub fn deployable(name: &str) -> Result<(), Invalid> {
 	if TAKEN.contains(&name) { Ok(()) } else { deploy::manifest::check_name(name) }
 }
 
 /// Infra's own that host deploys, each in the shape its name gives it. Every other app's shape is
 /// the role it asks for and the node grants; see crate::grants.
-pub(super) const TAKEN: [&str; 6] = ["keeper", "meter", "caddy", "tunnel", "panel", RESOLVER];
+pub(super) const TAKEN: [&str; 5] = ["keeper", "meter", "caddy", "tunnel", RESOLVER];
 
 /// The house's DNS, in a shape of its own and with its configuration written before it starts.
 pub(super) const RESOLVER: &str = "resolver";
 
-/// The panel's name: the one app host's own network admits by name.
-pub(super) const PANEL: &str = "panel";
-
-/// Whether host's own network admits `name`, run in `shape`: the panel, and an app run as a peer,
-/// which reads its own node's host. Nothing else but keeper joins it.
-pub(super) fn admitted(name: &str, shape: &Shape) -> bool {
-	name == PANEL || matches!(shape, Shape::Peer { .. })
+/// Whether host's own network admits an app run in `shape`: a peer, which reads its own node's
+/// host. Nothing else but keeper and Caddy joins it; see `attach`.
+pub(super) fn admitted(shape: &Shape) -> bool {
+	matches!(shape, Shape::Peer { .. })
 }
 
 /// Whether host's own network admits `manifest`'s app in the shape `shape_named` gives it, apart
@@ -36,7 +33,7 @@ pub(super) fn admits(host: &Host, manifest: &Manifest) -> bool {
 	let name = manifest.name.as_str();
 	let Ok(role) = host.config.grants.shape_of(manifest) else { return false };
 	let shape = shape_named(name, role, Vec::new(), placed(host), || Ok(Vec::new()));
-	shape.is_ok_and(|shape| admitted(name, &shape))
+	shape.is_ok_and(|shape| admitted(&shape))
 }
 
 /// Infra's own that stand on no network of their own: the meter has none, and Caddy and the tunnel
@@ -97,7 +94,6 @@ mod tests {
 		assert!(deployable("meter").is_ok());
 		assert!(deployable("caddy").is_ok());
 		assert!(deployable("tunnel").is_ok());
-		assert!(deployable("panel").is_ok());
 		assert!(deployable("objects").is_ok());
 		assert!(deployable("postgres").is_ok());
 		// Above infra a name is any app's; the node's grants, not the name, make it more.
@@ -110,15 +106,15 @@ mod tests {
 	}
 
 	#[test]
-	fn host_admits_the_panel_and_a_granted_peer_and_nothing_else() {
+	fn host_admits_a_granted_peer_and_nothing_else() {
 		use crate::grants::Role;
 		use std::path::PathBuf;
 		let admits = |name: &str, role: Option<Role>| {
 			let placed = Placed { tunnel: "172.30.0.2", meter: PathBuf::new(), lan: Some("10.0.0.11") };
 			let shape = shape_named(name, role, vec![], placed, || Ok(vec![])).unwrap();
-			admitted(name, &shape)
+			admitted(&shape)
 		};
-		assert!(admits("panel", None));
+		assert!(!admits("panel", None));
 		assert!(admits("relay", Some(Role::Peer)));
 		assert!(!admits("relay", None));
 		assert!(!admits("geo", None));

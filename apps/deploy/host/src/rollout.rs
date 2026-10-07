@@ -4,6 +4,7 @@
 
 mod admit;
 mod panel;
+mod remove;
 mod route;
 mod run;
 mod shape;
@@ -12,6 +13,7 @@ mod version;
 
 pub use admit::deployable;
 pub use panel::{PLATFORM, act, itself, redeploy, restorable, rollback};
+pub use remove::remove;
 pub use route::{attach, render, route};
 pub use run::from_run;
 #[cfg(test)]
@@ -47,6 +49,8 @@ pub enum Error {
 	Itself,
 	#[error("`{0}` is the platform's own: it is restarted, never stopped")]
 	Platform(String),
+	#[error("`{0}` is the node's way in or its way back, and is never removed")]
+	Kept(String),
 	#[error("`{0}` is not an app this node runs")]
 	NoSuchApp(String),
 	#[error("`{0}` has no previous version to go back to")]

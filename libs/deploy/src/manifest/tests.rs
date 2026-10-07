@@ -53,6 +53,7 @@ fn names_are_labels_and_not_the_platforms() {
 	assert_eq!(check_name("geo_ip"), Err(Invalid::Name("geo_ip".into())));
 	assert_eq!(check_name("api"), Err(Invalid::Reserved("api".into())));
 	assert_eq!(check_name("caddy"), Err(Invalid::Reserved("caddy".into())));
+	assert_eq!(check_name("infra"), Err(Invalid::Reserved("infra".into())));
 }
 
 #[test]
@@ -218,8 +219,8 @@ fn a_label_maps_an_apps_name_for_what_reaches_it_from_outside() {
 	// No `domain` set: the label is the app's own name.
 	assert_eq!(interface.label("gemini"), "gemini");
 	let mut labeled = gemini.clone();
-	labeled.interface.as_mut().unwrap().domain = Some("infra".into());
-	assert_eq!(labeled.interface.as_ref().unwrap().label("gemini"), "infra");
+	labeled.interface.as_mut().unwrap().domain = Some("ai".into());
+	assert_eq!(labeled.interface.as_ref().unwrap().label("gemini"), "ai");
 	assert_eq!(labeled.check("gemini", "rdu"), Ok(()));
 }
 
@@ -228,6 +229,9 @@ fn a_reserved_label_is_refused() {
 	let mut manifest = Manifest::parse(GEO).unwrap();
 	manifest.interface = Some(Interface { domain: Some("cms".into()), lan: true, home: None });
 	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Reserved("cms".into())));
+	// host's door: the panel answered on it, and Caddy now routes it to host itself.
+	manifest.interface.as_mut().unwrap().domain = Some("infra".into());
+	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Reserved("infra".into())));
 	manifest.interface.as_mut().unwrap().domain = Some("host".into());
 	assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Reserved("host".into())));
 	manifest.interface.as_mut().unwrap().domain = Some("Geo".into());

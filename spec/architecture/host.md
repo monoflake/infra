@@ -12,10 +12,10 @@ are placed on it, and how names and APIs reach them, is platform's `spec/archite
 
 ## One name inside, and a domain label outside
 
-An app has one name, and every place inside the node it appears is that name: `panel` is the app in
-host, the container, `/data/apps/panel/` on the machine, its network and its logs. **What it is
+An app has one name, and every place inside the node it appears is that name: `geo` is the app in
+host, the container, `/data/apps/geo/` on the machine, its network and its logs. **What it is
 reached by from outside is a DNS label of its own**, `[interface] domain` in its `service.toml`,
-which is the name unless it says otherwise: the panel is `infra.internal.ixc.one` and `infra.canmi.app`.
+which is the name unless it says otherwise: gemini is `gemini.internal.ixc.one` and `gemini.canmi.app`.
 A service's name is what code and people use; the label is what the address says, and it can
 change without the service being renamed.
 
@@ -25,7 +25,7 @@ change without the service being renamed.
   and routes share the one namespace of labels: no two things answer on one label.
 - `host` and `keeper` are reserved names for the two programs below, `meter` for what samples the
   machine ([meter.md](meter.md)), `api` for the API host, `caddy` for the door host deploys and
-  `tunnel` for the way in from Cloudflare (both below), `panel` for host's interface, `resolver`
+  `tunnel` for the way in from Cloudflare (both below), `infra` as a label for host's door, `resolver`
   for the house's DNS, and `cloudflared` because the tunnel ran under that name before host
   deployed it. `gateway` is not among them: the platform's gateway is deployed here as an app.
 - **Labels are reserved too, for what is on its way**: `cms`, for the editor, which keeps its own
@@ -39,10 +39,10 @@ change without the service being renamed.
   reaches a private scope, since Access stands in front of `api.canmi.app` and the gateway passes
   on only the scopes in its table, and our Workers reach every scope through the one VPC service.
 
-**A label is declared in the repository, and the panel will write it there.** The rule for every
-setting a declaration holds: git is the one record, and a change made in the panel becomes a
+**A label is declared in the repository, and the console will write it there.** The rule for every
+setting a declaration holds: git is the one record, and a change made in the console becomes a
 pull request against the repository the app's declaration lives in, which a bot opens, deployed like any other change once it is
-merged. Until then the panel shows it as pending. The bot is a GitHub account of its own, a
+merged. Until then the console shows it as pending. The bot is a GitHub account of its own, a
 collaborator given access to the repository like a person, so what it proposes is reviewed like
 anyone's and its token opens pull requests and nothing more. It is not built yet; until it is, a
 label is changed in `service.toml`.
@@ -162,11 +162,11 @@ services that hold them -- which is what lets infra be built without naming anyt
 the workspace's `spec/architecture/layers.md`, "What the package graph cannot see".
 
 Infra's own are the exception, shaped by name as before: host and keeper, the meter, Caddy, the
-tunnel and the resolver are what the node is made of, and naming them is infra naming itself. **host's own network admits the panel, by name, and an app run as a peer**, by the shape it is
+tunnel and the resolver are what the node is made of, and naming them is infra naming itself. **host's own network admits keeper and Caddy, by name, and an app run as a peer**, by the shape it is
 actually run in, so an app of infra's own granted `peer` is not let in by the grant.
 
 **An app's directory belongs to the user its image runs as.** host creates it as root, and an image
-that runs as someone else -- the meter and the resolver as 65532, the panel as 1000 -- could not
+that runs as someone else -- the meter and the resolver as 65532 -- could not
 write to it. So before each version starts, host reads the image's `USER` and, when it is a number
 other than root, gives the directory itself to that user and group; what is inside is left alone,
 since it was written by the app. A user named rather than numbered would need the image's own user
@@ -221,8 +221,8 @@ an app down.
 
 ## One token, behind two doors
 
-No account system: there is one user. Reaching the panel from the public goes through the tunnel
-with Cloudflare Access in front. Behind that, and directly on the LAN and the tailnet, **one long
+No account system: there is one user. Reaching host from the public goes through the tunnel, Caddy's
+door and Cloudflare Access in front. Behind that, and directly on the LAN and the tailnet, **one long
 API token is required everywhere** -- the one exception to the apps behind Caddy authenticating
 nothing. host holds the Docker socket, so its token is root on the machine, and a device on the LAN
 without it gets nothing.
@@ -232,7 +232,7 @@ without it gets nothing.
   as a saved password.
 - **It never goes to GitHub.** The one secret GitHub holds is the webhook's, and what it signs can
   do nothing but ask host to look at a run it will check for itself. A compromise of CI must not be
-  a compromise of the panel, or the reversal above bought nothing.
+  a compromise of host, or the reversal above bought nothing.
 
 ## host never updates itself; keeper updates host
 
@@ -310,7 +310,7 @@ own policy, and Caddy starts from the file host last wrote whether or not host i
 **Caddy is `apps/network/caddy`, built here and deployed by host, in a shape its name alone gets: the
 edge.** The official build with two modules, xcaddy's Cloudflare DNS provider for its certificates
 and the rate limiter host renders each service's limits into; declared, versioned, rolled back and
-shown in the panel as every app is. The shape differs from an app's sandbox in four things:
+shown in the console as every app is. The shape differs from an app's sandbox in four things:
 
 - Its ports, 80, 443 and 443 over UDP, are published on the machine; no other container publishes
   any but the resolver, which publishes DNS's.
@@ -456,76 +456,32 @@ and host mount.
 host attaches it to all of them again whenever it starts and whenever it is asked to reapply, so the
 remedy is one request rather than a list of commands.
 
-## The panel is an app of its own
+## host has no interface on the node, and a door Caddy keeps
 
-**The panel is `apps/deploy/panel`, a SvelteKit server on Node, and host's interface; host itself has
-none.** host holds the Docker socket and the whole of `/data`, so what faces a browser is kept out
-of it: a panel broken into reaches host's API and the private services it shows -- cron and the
-ledger, over the private network -- and nothing below them, and holds no token of its own to reach
-any of them with. It passes host the one the visitor signed in with, and asks a private service only
-once host has confirmed that token, since those services ask for none themselves. host deploys it like any
-app, in the sandbox, under a reserved name, restarted and never stopped from itself.
+**host has no interface of its own, and no node runs one.** The view of every node is the
+platform's console at the edge -- web's `spec/roadmap.md`, "One console runs the system, and it is
+this layer's" -- and a node keeps only host's API. The panel that was each node's interface,
+`apps/deploy/panel`, retired on 2026-10-07. host holds the Docker socket and the whole of `/data`,
+so nothing that faces a browser runs beside it.
 
 - **host answers on its own network alone.** It binds its port to its address on `app-host`,
-  which the panel and keeper join and Caddy does not; every app network host joins to check an
-  app's health leaves that port out of reach. Nothing routes a name to host: `infra.internal.ixc.one` and
-  `infra.canmi.app` are the panel's.
-- **The panel passes `/api/*` and `/notice` on to host**, carrying the session cookie as the
-  token, the request's type and the headers an answer needs back -- its cookies, its caching, a
-  redirect or a download's name -- and nothing else. An upload is
-  streamed through, never held. The hook's notice reaches host this way, and keeper's intake is
-  unchanged.
-- **Pages are rendered on the server, and what moves is drawn in the browser.** The first paint
-  is the page as host's answers make it -- whether the visitor is signed in, the list of apps, an
-  app, its images, its routes -- and the charts and everything after an action are the browser's,
-  asking through the same `/api`. A page host cannot answer for renders empty and asks again from
-  the browser.
-- It answers `/health` itself, without asking host, so it stays up to say that host does not.
+  which keeper and Caddy join; every app network host joins to check an app's health leaves that
+  port out of reach.
+- **Caddy keeps one door to it, `infra.<suffix>`, and an allowlist behind it**: `POST /notice`,
+  which is how CI's notice reaches host, and the `GET` routes the console reads -- the node's now
+  and its series, the apps, an app, its history and its series, the events, the disk. Everything
+  else on that name answers `404`; Caddy adds no authentication and passes `Authorization` through,
+  so host's own tokens are the only check. The name is reserved, so no app or route can take it.
+- **Everything else is asked over the tailnet**, by `mise run node <verb> <node>` on the author's
+  machine: it reaches the node by SSH, forwards a local port to host's address on `app-host`, and
+  hands curl the token on stdin, so it works with Caddy down and needs nothing above infra -- the
+  workspace's `spec/architecture/layers.md`, "Four places, and which way they lean". Its verbs are
+  what an operator does to an app below, plus `apps`, `events` and `deploy`.
 
-It is written in `apps/deploy/panel/`, its components named in lowercase like every file.
-
-**It is styled as the site is, in the site's three layers, and colored as nothing else here is.**
-Tailwind in the markup for where a thing sits, StyleX for what it looks like, a `<style>` block
-for what carries no class -- web's `spec/architecture/css/layers.md` decides which is which, and the build
-and development arrangements there are copied rather than re-derived. Its colors are Nord's, one
-theme and dark, with no light twin: the sixteen are declared under their own names in `panel.css`,
-what the panel means by each is declared beside them, and a surface in `src/lib/style/` reads the
-meaning. They are its own rather than `@canmi/kit`'s tokens, which are the site's. Icons are Lucide's, and
-what moves -- a page arriving, the sidebar's marker crossing to the next page -- moves on
-`@canmi/kit/motion`'s timing, as the editor's panels do.
-
-**Its charts are d3's arithmetic and Svelte's drawing.** d3's scale, shape and array modules
-compute the axes, the paths and the point nearest the pointer; the SVG is written in the component,
-so it follows the component's state like any other markup and nothing reaches into the DOM behind
-Svelte's back. The rest of d3 -- selections, transitions, its axis generator -- is not taken: each
-would draw on its own, and the motion is `@canmi/kit/motion`'s. A chart of bytes ticks in binary
-units, and a series breaks where points are missing rather than drawing across the gap. **A fill is
-for a chart of one or two lines.** One line keeps its gradient and two share it; three or more are
-drawn as lines alone, because every fill layered on the others washes the plot toward gray.
-
-**The machine's names are made readable where they are shown, never where they are kept.** A
-thermal zone arrives as its driver calls it -- `bigcore`, `littlecore`, `ddr` -- and the panel's
-`labels.ts` says it properly, falling back to the name capitalized. big.LITTLE's size words are
-never shown as written: big is Performance, little is Efficiency, and a middle tier is Balanced, so
-`bigcore0` is Performance cores 0. A cluster has no name of its own, and takes the same words by
-how fast each can run; a machine whose clusters all run at one clock shows that one frequency.
-
-**It is laid out for a desktop.** A sidebar and a page beside it, the page's width following the
-window; a phone is not refused and not designed for.
-
-**Its build is SvelteKit's Node adapter's, with every dependency bundled in**, so the image is
-Node and that build alone, run as Node's own user. It is built on the Node major the workspace pins,
-installing the pnpm the repository names.
-
-**The panel signs in with the token, once.** The first visit asks for it; host answers with a
-cookie holding it, `HttpOnly`, `Secure` and `SameSite=Strict`, for thirty days, and every request
-after carries that.
-The API takes the cookie or an `Authorization` header alike, so scripts and keeper are unchanged.
-**A second token reads and does not act**: `HOST_READ_TOKEN`, optional, taken from the header alone,
-admits `GET` and is refused anything else -- what the platform's console carries, since the token
-above is root on the machine; see platform's `spec/architecture/console.md`.
-The token is asked for on every door, the LAN's included; from the public, Access stands in front
-as well.
+**The token is taken from the `Authorization` header alone.** **A second token reads and does not
+act**: `HOST_READ_TOKEN`, optional, admits `GET` and is refused anything else -- what the
+platform's console carries, since the token above is root on the machine; see platform's
+`spec/architecture/console.md`. From the public, Access stands in front as well.
 
 **Notifications and more nodes -- [nodes.md](nodes.md) -- come after the first version**, which deploys the apps of this
 repository and the platform's and adopts upstream images.
@@ -540,9 +496,9 @@ the state was split into four files is read into them once and renamed aside.
 
 **Every event is kept, and none is pruned.** A deploy, a redeploy, a rollback of either kind, a
 start, a stop, a restart and a deploy skipped are each a row: which app, what started it -- a CI run
-and its commit, an upload, or the panel -- the image, when it started and ended, how it ended, and
-why when it failed, with the logs of the failure. The panel pages through them fifty at a time, the
-newest first, as far back as they go.
+and its commit, an upload, or an operator -- the image, when it started and ended, how it ended, and
+why when it failed, with the logs of the failure. They are paged fifty at a time, the newest first, as far
+back as they go.
 
 **A deploy is one row that moves through its stages as it happens**: `downloading`, `admitting` --
 the declaration read, its placements and any hold weighed, `admit` passed -- `loading` and
@@ -555,29 +511,28 @@ again, since nothing will finish it.
 
 **Every line an app writes is kept.** Docker does not rotate the logs of a container host runs, and
 before a container is replaced its whole log is written to `/data/logs/<app>/`, one file per
-version it ran, since removing the container would otherwise remove its log. The panel shows the
-running container's recent lines and every archived file. Clearing them out is a later decision,
+version it ran, since removing the container would otherwise remove its log, and both are read on
+the node. Clearing them out is a later decision,
 made when the disk says so.
 
-### An app's environment is two files, and the panel shows one
+### An app's environment is two files
 
-Configuration and secrets are both environment variables, given to the container when it starts,
-and both edited in the panel. They are two files in the app's own directory, outside what its
-container mounts, readable by root alone:
+Configuration and secrets are both environment variables, given to the container when it starts.
+They are two files in the app's own directory, outside what its container mounts, readable by root
+alone and edited over SSH:
 
-- `config.env` is configuration: the panel shows every key and value.
-- `secret.env` is secrets: the panel shows that a key exists, and never its value. Reading one is
-  done over SSH.
+- `config.env` is configuration.
+- `secret.env` is secrets, moved there through sops and a pipe and never printed.
 
 They sit in the app's subvolume, so the snapshot a deploy takes holds them, and a failed deploy put
 back puts the environment back with the code. A change applies when the container is next started
-from its version: the panel says so, and a redeploy does it.
+from its version, which a redeploy does.
 
 **host adds one variable of its own, `NODE`, the node's name**, over whatever the two files say, so
 an app knows where it runs without being told per node -- the probe records it as the place it
 looked from.
 
-### What the panel can do to an app
+### What an operator can do to an app
 
 - **Redeploy** runs the current version again, as a deploy: snapshot, start, check, and the version
   before put back if the check fails.
@@ -588,21 +543,20 @@ looked from.
   since is lost, so it is shown as the dangerous one. It is offered while that snapshot is among the
   ones kept.
 - **Start, stop and restart** act on the container as it is.
-
-Every one of them is confirmed twice.
+- **Remove** stops an app and takes away its container, its network and its routes, keeping its
+  history, and its data unless asked to drop it too -- for an app no longer placed here. host,
+  keeper, Caddy and the tunnel are refused.
 
 **host is listed beside the apps it runs**, read back from its own container's label, since keeper
 keeps no record and host none of itself: its logs and its version are there, with no previous
 version and no environment, which is its `.env` beside the compose file and read by nothing here.
 
-**The node's own five -- host, keeper, Caddy, the tunnel and the panel -- are restarted from
-the panel and never stopped or started.** Each stopped takes the panel, the way in or the way back
-with it: host answers the panel, the panel is the interface, Caddy carries it, the tunnel is the
-public side and CI's notices, and keeper is what replaces host. host does not redeploy or roll
-itself back either, since keeper is the one that replaces it; the other four are redeployed and
-rolled back like any app. A restart of host, Caddy or the panel -- what answers the request and
-what carries it -- is answered first and done half a second later, and the panel waits for the app
-to answer again. host's own is recorded as done when asked, because nothing of it is left to finish
+**The node's own four -- host, keeper, Caddy and the tunnel -- are restarted and never stopped or
+started.** Each stopped takes a way in or the way back with it: host answers, Caddy carries the
+console's reads and CI's notices, the tunnel is the public side, and keeper is what replaces host.
+host does not redeploy or roll itself back either, since keeper is the one that replaces it; the
+other three are redeployed and rolled back like any app. A restart of host or Caddy -- what answers
+the request and what carries it -- is answered first and done half a second later. host's own is recorded as done when asked, because nothing of it is left to finish
 the record once it restarts.
 
 **A stop holds until a start.** A stopped app stays stopped through a reboot -- Docker's own
@@ -612,11 +566,11 @@ or an upload is a choice to run something, and ends the hold.
 
 ### An image is kept while something could run it
 
-**What an image is kept for is decided in host's background, and the panel only reads it.** Once
-a minute, or at once when the panel asks, host scans the images and says why each stays: what an
+**What an image is kept for is decided in host's background, and is only read.** Once a minute, or
+at once when asked, host scans the images and says why each stays: what an
 app runs, what it would go back to on a rollback, what any container is made from -- whoever started
-it -- and host's own, which keeper keeps and collects. The scan is held in memory, so the Images page
-answers at once; Docker's measure of its images on disk, the slow part, is taken outside the deploy
+it -- and host's own, which keeper keeps and collects. The scan is held in memory, so asking answers at
+once; Docker's measure of its images on disk, the slow part, is taken outside the deploy
 lock.
 
 **An image nothing needs is flagged, and removed an hour after.** The moment it was first found
@@ -625,10 +579,9 @@ again before its hour is up -- the target of a rollback, a container started fro
 unflagged. A dangling image a newer build left, an image of an app no longer deployed, an upstream
 image a compose file once pulled: each goes on its own.
 
-**What the panel asks of the images is a task in a queue, never a request that waits.** Removing
-one now, or collecting all of them now, is answered with the queued task; host's background does
-them in order and then scans again, and the page reads the queue and the scan every two seconds
-while anything is queued and every fifteen otherwise. Every task and every sweep takes the deploy
+**What is asked of the images is a task in a queue, never a request that waits.** Removing one
+now, or collecting all of them now, is answered with the queued task; host's background does them
+in order and then scans again. Every task and every sweep takes the deploy
 lock, so an image a deploy has loaded and not yet started is never taken for one nothing needs.
 
 A deploy still collects on its own what it made unneeded, as it always has.
@@ -647,9 +600,6 @@ container the paths are Linux's own, so host binds what it would bind on the mac
 3. `docker exec -i ... docker load` host's and the apps' archives from `mise run image`, and start
    host inside it as the compose file does, with a token of its own; Caddy's absence is logged and
    ignored.
-4. Deploy through its API as `mise run host deploy` would, and point the panel at it:
-   `HOST_API=http://localhost:11011 pnpm run dev` in `apps/deploy/panel`. Without `HOST_API` a
-   development panel asks the running panel on the machine, signed in as the token mise decrypts.
+4. Deploy through its API as `mise run host deploy` would.
 
-A copy of the machine's four databases, read over SSH, gives the panel the real apps and history to
-draw; `docker cp` cannot see into the btrfs mount, so they go in through `docker exec -i`.
+A copy of the machine's four databases, read over SSH, gives it the real apps and history to read; `docker cp` cannot see into the btrfs mount, so they go in through `docker exec -i`.

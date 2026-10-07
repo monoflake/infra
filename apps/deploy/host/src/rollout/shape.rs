@@ -1,6 +1,5 @@
 //! How the node runs an app: the shape each name or granted role is given, and the environment it
-//! is run with. See spec/architecture/host.md, "An app's environment is two files, and the panel
-//! shows one".
+//! is run with. See spec/architecture/host.md, "An app's environment is two files".
 
 use super::Error;
 use super::admit::RESOLVER;
@@ -25,7 +24,7 @@ pub(super) fn shape_of(host: &Host, manifest: &Manifest) -> Result<Shape, Error>
 	}
 	let mut env = crate::environment::variables(&host.volumes.root(name))?;
 	// Every app is told which node it runs on, whatever its own files say. See
-	// spec/architecture/host.md, "An app's environment is two files, and the panel shows one".
+	// spec/architecture/host.md, "An app's environment is two files".
 	bound(&mut env, vec![format!("NODE={}", host.config.node)]);
 	let sockets = || {
 		Ok(

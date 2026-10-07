@@ -22,22 +22,22 @@ pub const VERSION: u32 = 1;
 /// label, and the containers an app's name would collide with. A service above infra is named like
 /// any app, and what it may do beyond one is the node's grant, not its name. See
 /// spec/architecture/host.md, "A role is asked for by the app and granted by the node".
-const RESERVED: [&str; 9] =
-	["host", "keeper", "meter", "api", "caddy", "tunnel", "panel", "cloudflared", "resolver"];
+const RESERVED: [&str; 8] =
+	["host", "keeper", "meter", "api", "caddy", "tunnel", "cloudflared", "resolver"];
 
 /// What an app's object storage sidecar is named after it, so no app may end its own name so. See
 /// platform's spec/architecture/objects.md, "A sidecar per app, over the app's own directory".
 pub const SIDECAR_SUFFIX: &str = "-objects";
 
-/// Labels reserved for what is on its way, not yet a real app or route: `cms`, the editor, which
-/// keeps its own address until it moves. See spec/architecture/host.md, "One name inside, and a
-/// domain label outside".
-const RESERVED_LABELS: [&str; 1] = ["cms"];
+/// Labels no app or route takes: `infra`, host's door, which Caddy routes to host itself, and
+/// `cms`, the editor, which keeps its own address until it moves. See spec/architecture/host.md,
+/// "One name inside, and a domain label outside".
+const RESERVED_LABELS: [&str; 2] = ["infra", "cms"];
 
 /// The reserved names infra still deploys, each in a shape its name alone chooses: host and keeper,
-/// which each deploy the other, the meter, Caddy, the tunnel, the panel and the house's DNS. See
+/// which each deploy the other, the meter, Caddy, the tunnel and the house's DNS. See
 /// spec/architecture/host.md, "host never updates itself; keeper updates host".
-pub const OWN: [&str; 7] = ["host", "keeper", "meter", "caddy", "tunnel", "panel", "resolver"];
+pub const OWN: [&str; 6] = ["host", "keeper", "meter", "caddy", "tunnel", "resolver"];
 
 /// The roles an app may ask for beyond a sandbox, by the word its `[shape]` names each with.
 pub const SHAPES: [&str; 4] = ["scheduler", "steward", "reporter", "peer"];

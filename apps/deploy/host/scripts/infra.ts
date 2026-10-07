@@ -1,10 +1,11 @@
 /**
- * `infra <what> [app] [path] [--json]`: read the node the way an agent asks before reaching for
- * SSH -- host's inspect routes and the read-only ones beside them, each behind its token.
- * See spec/architecture/inspect.md, "`mise run infra`".
+ * `infra <what> [app] [path] [--json] [--node <name>]`: read a node the way an agent asks before
+ * reaching for a shell -- host's inspect routes and the read-only ones beside them, each behind its
+ * token, over the tailnet as tailnet.ts reaches host. The machine at home unless `--node` names
+ * another. See spec/architecture/inspect.md, "`mise run infra`".
  */
 import { spawnSync } from 'node:child_process';
-import { INFRA } from '@monoflake/urls';
+import { throughTailnet } from './tailnet.ts';
 
 type Envelope<T> =
 	| { status: 'success'; data: T }
@@ -25,7 +26,7 @@ const WHATS = [
 ] as const;
 type What = (typeof WHATS)[number];
 
-const USAGE = `usage: infra <what> [app] [path] [--json]\nwhat: ${WHATS.join(' | ')}`;
+const USAGE = `usage: infra <what> [app] [path] [--json] [--node <name>]\nwhat: ${WHATS.join(' | ')}`;
 
 function fail(message: string): never {
 	console.error(message);
@@ -74,22 +75,24 @@ function route(what: What, app: string | undefined, path: string | undefined): s
 	}
 }
 
+function unreached(message: string): Envelope<unknown> {
+	return { status: 'error', code: 'unreached', message };
+}
+
 /**
- * Through curl rather than fetch, same as `host.ts`: macOS refuses node from mise the LAN, and
- * curl, being the system's own, is never asked. The token goes in on stdin so it never shows in
- * `ps`. See apps/deploy/host/scripts/host.ts.
+ * Through curl rather than fetch, same as `host.ts`. The token goes in on stdin so it never shows
+ * in `ps`. A failure is returned as an envelope rather than exiting, so the forward is closed.
  */
-export function fetchEnvelope(path: string, token: string): Envelope<unknown> {
-	const sent = spawnSync(
-		'curl',
-		['--silent', '--show-error', '--header', '@-', `${INFRA.panel}${path}`],
-		{ input: `authorization: Bearer ${token}\n`, encoding: 'utf8' },
-	);
-	if (sent.status !== 0) fail(sent.stderr?.trim() || `curl failed reaching ${path}`);
+export function fetchEnvelope(base: string, path: string, token: string): Envelope<unknown> {
+	const sent = spawnSync('curl', ['--silent', '--show-error', '--header', '@-', `${base}${path}`], {
+		input: `authorization: Bearer ${token}\n`,
+		encoding: 'utf8',
+	});
+	if (sent.status !== 0) return unreached(sent.stderr?.trim() || `curl failed reaching ${path}`);
 	try {
 		return JSON.parse(sent.stdout) as Envelope<unknown>;
 	} catch {
-		fail(`host answered nothing readable: ${sent.stdout}`);
+		return unreached(`host answered nothing readable: ${sent.stdout}`);
 	}
 }
 
@@ -251,22 +254,35 @@ export function render(what: What, data: unknown, json: boolean): string {
 	}
 }
 
-function parse(argv: string[]): { what: What; app?: string; path?: string; json: boolean } {
+interface Asked {
+	what: What;
+	app?: string;
+	path?: string;
+	json: boolean;
+	node: string;
+}
+
+function parse(argv: string[]): Asked {
 	const json = argv.includes('--json');
-	const positional = argv.filter((arg) => arg !== '--json');
+	const flag = argv.indexOf('--node');
+	const node = flag === -1 ? 'rdu' : (argv[flag + 1] ?? fail(`--node takes a name\n${USAGE}`));
+	const named = (index: number) => flag !== -1 && (index === flag || index === flag + 1);
+	const positional = argv.filter((arg, index) => arg !== '--json' && !named(index));
 	const [what, app, path] = positional;
 	if (!what) fail(USAGE);
 	if (!(WHATS as readonly string[]).includes(what)) fail(`unknown "${what}"\n${USAGE}`);
 	const needs = NEEDS[what as What];
 	if (needs.app && !app) fail(`"${what}" needs an app\n${USAGE}`);
-	return { what: what as What, app, path, json };
+	return { what: what as What, app, path, json, node };
 }
 
-function main(): void {
-	const token =
-		process.env.HOST_TOKEN_RDU ?? fail('HOST_TOKEN_RDU is not set; it comes from secrets.json');
-	const { what, app, path, json } = parse(process.argv.slice(2));
-	const envelope = fetchEnvelope(route(what, app, path), token);
+async function main(): Promise<void> {
+	const { what, app, path, json, node } = parse(process.argv.slice(2));
+	const key = `HOST_TOKEN_${node.toUpperCase()}`;
+	const token = process.env[key] ?? fail(`${key} is not set; it comes from secrets.json`);
+	const envelope = await throughTailnet(node, (base) =>
+		fetchEnvelope(base, route(what, app, path), token),
+	);
 	if (envelope.status === 'error') {
 		console.error(`${envelope.code}: ${envelope.message}`);
 		process.exit(1);
@@ -274,4 +290,4 @@ function main(): void {
 	console.log(render(what, envelope.data, json));
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file://').href) main();
+if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file://').href) await main();

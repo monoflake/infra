@@ -1,7 +1,7 @@
 # The repository
 
 The infrastructure of the author's system, the layer everything else is deployed by: `host`, which
-runs every app on a node, and `keeper`, which replaces host; `panel`, host's interface; `meter`,
+runs every app on a node, and `keeper`, which replaces host; `meter`,
 which samples the node; and `caddy`, `tunnel` and `resolver`, the doors a request comes in by.
 `libs/deploy` is what host and keeper share, and `libs/urls` the addresses of all of it. Why the
 system is cut into this layer, the platform's and the services', is the workspace's
@@ -18,11 +18,11 @@ package found by `pnpm-workspace.yaml`'s globs, so a TypeScript-only directory n
 **The apps are grouped by what each does**, as the platform's are, so the two repositories read
 the same way:
 
-| Group     | Apps                    | What they are                                     |
-| --------- | ----------------------- | ------------------------------------------------- |
-| `deploy`  | host, keeper, panel     | what deploys every app, and the interface over it |
-| `network` | caddy, tunnel, resolver | the doors a request comes in by                   |
-| `observe` | meter                   | the node watched from inside                      |
+| Group     | Apps                    | What they are                   |
+| --------- | ----------------------- | ------------------------------- |
+| `deploy`  | host, keeper            | what deploys every app          |
+| `network` | caddy, tunnel, resolver | the doors a request comes in by |
+| `observe` | meter                   | the node watched from inside    |
 
 **A group is a directory and nothing more.** An app's name is still its directory's own: host
 chooses a container's shape by the app's name and keeps its data under `/data/apps/<name>`, and
@@ -50,8 +50,7 @@ change that makes it accept it.
 
 ## Reaching the LAN from a browser that cannot
 
-**`mise run reach [name]` answers on `http://localhost:26520` for `<name>.internal.ixc.one`**, host's
-panel when no name is given. macOS asks before a program reaches the local network, and a browser
+**`mise run reach <name>` answers on `http://localhost:26520` for `<name>.internal.ixc.one`**. macOS asks before a program reaches the local network, and a browser
 an agent drives, like node from mise, is refused; the system's own `ssh` and `curl` never are.
 So [`reach.ts`](../apps/deploy/host/scripts/reach.ts) has ssh carry the node's port 443 to a loopback
 port and speaks to that alone, sending every request as the name would arrive: TLS with the name

@@ -44,11 +44,12 @@ pub fn render(host: &Host) -> Result<serde_json::Value, store::Error> {
 /// rather than restarted comes back attached to none of them.
 pub async fn attach(host: &Host) -> Result<(), RouteError> {
 	let members = [host.config.own_container.as_str(), host.config.caddy.container.as_str()];
-	// host's own network is the panel's, a peer's and keeper's, never Caddy's: nothing is routed
-	// to host.
+	// host's own network is a peer's, keeper's and Caddy's. Caddy is on it for the door alone --
+	// the notice and the reads its allowlist names; see caddy::door and spec/architecture/host.md,
+	// "host has no interface on the node, and a door Caddy keeps".
 	let own = deploy::engine::network_of(&host.config.own_container);
 	host.engine.network(&host.config.own_container, &members[..1]).await?;
-	host.engine.leave(&own, &members[1..]).await?;
+	host.engine.join(&own, &members[1..], false).await?;
 	for app in host.store.apps()? {
 		let name = app.manifest.name.as_str();
 		if admits(host, &app.manifest) {

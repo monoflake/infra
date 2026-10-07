@@ -1,7 +1,7 @@
 # `meter`: what the machine is doing
 
 `apps/observe/meter` samples the machine at home every second -- processors, memory, temperatures, disks,
-the network -- keeps what it sampled, and answers host, whose panel draws it. It reads and never acts:
+the network -- keeps what it sampled, and answers host, whose console draws it. It reads and never acts:
 an instrument, as its name says. host itself stays out of this: it holds the Docker socket and every deployment, and
 a sampler that stalled or leaked inside it would take them down with it.
 
@@ -46,8 +46,7 @@ rather than a change of shape. Names are dotted, lowercase and spelled out.
   a little cluster has `cpu.frequency.0` and `cpu.frequency.4`. Read per core it would be the same
   number several times over. A kernel with no policies has each core as its own cluster.
 - A zone is named by its type with `-thermal` dropped: `soc`, `gpu`, `bigcore0`. The name stays the
-  kernel's; making it readable is the panel's -- see [host.md](host.md), "The panel is an app of
-  its own".
+  kernel's; making it readable is the console's, where it is drawn.
 - The network counts interfaces that leave the machine. Loopback, container veths, bridges and
   tunnels (`tailscale`, `tun`, `wg`) are left out, because each carries bytes a physical interface
   already counted or none that left. It is read through PID 1 because the meter has no network of
@@ -120,7 +119,7 @@ which is `/data/apps/meter/data/meter.sock` on the machine, and host, which moun
 it there. The one other reader is the app granted the `reporter` role, which is given the meter's
 data directory read-only -- see [host.md](host.md), "A role is asked for by the app and granted by
 the node". Nothing else can reach it, so it needs no token,
-and what it answers goes to the panel only through host's API, behind host's session.
+and what it answers leaves the node only through host's API, behind host's token.
 
 | Route                                                  | Answers                                                           |
 | ------------------------------------------------------ | ----------------------------------------------------------------- |
@@ -136,8 +135,8 @@ and what it answers goes to the panel only through host's API, behind host's ses
 is `{ at, values: { <metric>: { average, minimum, maximum, count } } }`, the same at every grain,
 so a chart draws one shape.
 
-**The panel reads it through host, at `/api/node/now` and `/api/node/series`,** which pass the
-query on and the meter's answer back unchanged, behind host's session like every other `/api`
+**The console reads it through host, at `/api/node/now` and `/api/node/series`,** which pass the
+query on and the meter's answer back unchanged, behind host's token like every other `/api`
 route. host finds the socket from the meter it deployed -- `/data/apps/meter/data/` and the file the
 declaration names -- and answers `meter_unavailable` when none is deployed or nothing answers.
 

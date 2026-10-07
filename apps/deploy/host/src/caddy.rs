@@ -294,8 +294,41 @@ fn private_api(config: &CaddyConfig, apps: &[Deployed]) -> Value {
 	})
 }
 
+/// The label host's door answers on, the one the panel answered on before it retired. Reserved, so
+/// no app or route takes it.
+pub const DOOR: &str = "infra";
+
+/// What the door passes on to host: CI's notice, and the reads the console asks a node for. Every
+/// write is asked over the tailnet instead. See spec/architecture/host.md, "host has no interface
+/// on the node, and a door Caddy keeps".
+const DOOR_READS: &str = concat!(
+	"^/api/(node/(now|series)|apps|apps/[^/]+|apps/[^/]+/(history|metrics/series)|events",
+	"|inspect/disk)$"
+);
+
+/// host at `<DOOR>.<suffix>`, by the allowlist above and nothing else: a 404 for the rest. Caddy
+/// adds no authentication; host's own tokens are the only check, carried through untouched.
+fn door(name: String) -> Value {
+	let host = format!("host:{}", crate::config::PORT);
+	json!({
+		"match": [{ "host": [name.clone()] }],
+		"handle": [{ "handler": "subroute", "routes": [
+			{
+				"match": [{ "method": ["POST"], "path": ["/notice"] }],
+				"handle": [encode(), proxy(&host, &name)]
+			},
+			{
+				"match": [{ "method": ["GET"], "path_regexp": { "pattern": DOOR_READS } }],
+				"handle": [encode(), proxy(&host, &name)]
+			},
+			{ "handle": [{ "handler": "static_response", "status_code": 404 }] }
+		]}]
+	})
+}
+
 /// Everything reached by a subdomain of its own on one side, by its label: each app with an
-/// interface, the panel among them, and each route. host has none: only the panel reaches it.
+/// interface, and each route. host has none of its own, and is reached by `door` alone. A stale
+/// app still holding the door's label is passed over, and said so.
 /// Every label is on `.app`; the private suffix carries it only when the interface's `lan`, or the
 /// route's `private`, says so. See spec/architecture/host.md, "The private suffix is a mirror of
 /// part of `.app`, and nothing else".
@@ -321,6 +354,13 @@ fn interfaces(apps: &[Deployed], routes: &[Route], public: bool) -> Vec<Target> 
 		dial: route.upstream.clone(),
 		home: route.home.clone(),
 	}));
+	targets.retain(|target| {
+		let stale = target.name == DOOR;
+		if stale {
+			eprintln!("host: `{}` answers on `{DOOR}`, which is host's door; not routed", target.dial);
+		}
+		!stale
+	});
 	targets
 }
 
@@ -335,6 +375,7 @@ fn private_side(
 
 	let mut inside = vec![refuse_unless(&config.private_sources)];
 	inside.push(api_host(format!("api.{private}"), apps, Side::Private));
+	inside.push(door(format!("{DOOR}.{private}")));
 	for target in interfaces(apps, routes, false) {
 		inside.push(named(format!("{}.{private}", target.name), &target));
 	}
@@ -375,6 +416,7 @@ pub fn render(config: &CaddyConfig, apps: &[Deployed], routes: &[Route], lan: bo
 
 	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
 	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel));
+	outside.push(door(format!("{DOOR}.{public}")));
 	for target in interfaces(apps, routes, true) {
 		outside.push(named(format!("{}.{public}", target.name), &target));
 	}
@@ -767,6 +809,82 @@ mod tests {
 		assert_eq!(rendered.matches(r#""dial":"keeper:11010""#).count(), 2);
 	}
 
+	/// The door's routes on the side whose servers are named `server`, under `name`.
+	fn door_on(rendered: &Value, server: &str, name: &str) -> Value {
+		let side = &rendered["apps"]["http"]["servers"][server]["routes"];
+		let names = side
+			.as_array()
+			.unwrap()
+			.iter()
+			.flat_map(|route| route["handle"][0]["routes"].as_array().cloned().unwrap_or_default());
+		let found = names.into_iter().find(|route| route["match"][0]["host"][0] == name);
+		found.unwrap_or_else(|| panic!("no {name} on {server}"))["handle"][0]["routes"].clone()
+	}
+
+	#[test]
+	fn the_door_passes_the_notice_and_the_reads_to_host_and_nothing_else() {
+		let rendered = full(true);
+		for (server, name) in [("tunnel", "infra.outside.test"), ("private", "infra.inside.test")] {
+			let routes = door_on(&rendered, server, name);
+			assert_eq!(routes[0]["match"][0], json!({ "method": ["POST"], "path": ["/notice"] }));
+			assert_eq!(routes[1]["match"][0]["method"], json!(["GET"]));
+			assert_eq!(routes[2]["handle"][0]["status_code"], 404);
+			assert_eq!(text(&routes).matches(r#""dial":"host:11011""#).count(), 2);
+			// No token of Caddy's own: what the caller sent reaches host as it was.
+			assert!(!text(&routes).contains("Authorization"));
+		}
+		let reads = regex::Regex::new(DOOR_READS).unwrap();
+		for path in [
+			"/api/node/now",
+			"/api/node/series",
+			"/api/apps",
+			"/api/apps/geo",
+			"/api/apps/geo/history",
+			"/api/apps/geo/metrics/series",
+			"/api/events",
+			"/api/inspect/disk",
+		] {
+			assert!(reads.is_match(path), "{path}");
+		}
+		for path in [
+			"/api/session",
+			"/api/apps/geo/restart",
+			"/api/apps/geo/environment",
+			"/api/apps/geo/logs",
+			"/api/inspect/files/geo",
+			"/api/caddy",
+			"/api/routes",
+			"/api/apps/geo/history/x",
+			"/notice",
+		] {
+			assert!(!reads.is_match(path), "{path}");
+		}
+	}
+
+	#[test]
+	fn the_door_wins_over_an_app_that_still_holds_its_label() {
+		let panel = Deployed {
+			manifest: Manifest::parse(concat!(
+				"version = 1\nname = \"panel\"\nplacements = [\"rdu\"]\n",
+				"[container]\nport = 26519\nhealth = \"/health\"\n",
+				"[interface]\ndomain = \"geo-ui\"\n"
+			))
+			.unwrap(),
+			image: "sha256:p".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		// As a store from before the label was reserved holds it, which no check would now take.
+		let mut stale = panel.clone();
+		stale.manifest.interface.as_mut().unwrap().domain = Some(DOOR.into());
+		let rendered = text(&render(&config(), &[stale], &[], true));
+		assert!(!rendered.contains("panel:26519"));
+		assert_eq!(rendered.matches(r#"{"host":["infra.outside.test"]}"#).count(), 1);
+		let rendered = text(&render(&config(), &[panel], &[], true));
+		assert!(rendered.contains(r#"{"host":["geo-ui.outside.test"]}"#));
+	}
+
 	#[test]
 	fn the_render_is_the_same_for_the_same_state() {
 		// Stable output is what makes a diff of two renders mean something changed.
@@ -802,7 +920,20 @@ mod tests {
 			r#""prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
 			r#""upstreams":[{"dial":"geo:23440"}]}],"match":[{"path":["/geo","/geo/*"]}]},"#,
 			r#"{"handle":[{"handler":"static_response","status_code":404}]}]}],"#,
-			r#""match":[{"host":["api.inside.test"]}]},{"handle":[{"handler":"subroute","#,
+			r#""match":[{"host":["api.inside.test"]}]},"#,
+			// host's door, ahead of every label an app or a route answers on.
+			r#"{"handle":[{"handler":"subroute","routes":[{"handle":[{"encodings":{"gzip":{},"#,
+			r#""zstd":{}},"handler":"encode","prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
+			r#""upstreams":[{"dial":"host:11011"}]}],"#,
+			r#""match":[{"method":["POST"],"path":["/notice"]}]},"#,
+			r#"{"handle":[{"encodings":{"gzip":{},"zstd":{}},"handler":"encode","#,
+			r#""prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
+			r#""upstreams":[{"dial":"host:11011"}]}],"match":[{"method":["GET"],"#,
+			r#""path_regexp":{"pattern":"^/api/(node/(now|series)|apps|apps/[^/]+|"#,
+			r#"apps/[^/]+/(history|metrics/series)|events|inspect/disk)$"}}]},"#,
+			r#"{"handle":[{"handler":"static_response","status_code":404}]}]}],"#,
+			r#""match":[{"host":["infra.inside.test"]}]},"#,
+			r#"{"handle":[{"handler":"subroute","#,
 			r#""routes":[{"handle":[{"handler":"static_response","headers":{"Location":["/admin"]},"#,
 			r#""status_code":307}],"match":[{"path":["/"]}]},{"handle":[{"encodings":{"gzip":{},"#,
 			r#""zstd":{}},"handler":"encode","prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,

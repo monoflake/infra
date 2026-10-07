@@ -16,8 +16,8 @@ from graph import ROOT, app_of, build_inputs, changed, dependents, node_graph, o
 ALWAYS = ["secrets", "refs", "comments"]
 # Whole-program by nature: tsc reads two programs, vitest one suite, oxlint the tree.
 NODE = ["check", "lint", "test"]
-# Gates that belong to one package, run when it or anything it imports changed.
-PACKAGE_GATES = {"@monoflake/panel": ["check-panel"]}
+# Gates that belong to one package, run when it or anything it imports changed. None today.
+PACKAGE_GATES: dict[str, list[str]] = {}
 RUST = ["lint-rust", "test-rust"]
 EVERYTHING = ALWAYS + NODE + [g for gates in PACKAGE_GATES.values() for g in gates] + RUST
 

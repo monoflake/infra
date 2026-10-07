@@ -4,7 +4,7 @@ An agent working on the node used to answer its questions over SSH: which contai
 which networks, with which mounts; what a directory holds; whether the kernel killed something.
 **host answers them instead, read-only, on its API, behind its token**, and SSH is kept for the
 day that API is what broke. The same answers are what `mise run infra` prints, and what the
-panel's pages are to draw once it has them -- a file manager, a view of containers -- so each is
+console's pages are to draw once it has them -- a file manager, a view of containers -- so each is
 built once, in host, the one program with the Docker socket and the whole of `/data`.
 
 ## What is answered
@@ -29,13 +29,13 @@ more is answered by a new read-only module, never by running something on reques
 The environment is not an inspect route: it is `/api/apps/<app>/environment`, which answers every
 variable's **name and type** -- `config` or `secret` -- with a `config` value and never a
 `secret`'s, and takes a new value for either by `PUT` -- or removes one by `DELETE` -- at
-`/api/apps/<app>/environment/<kind>/<key>`. What the panel shows, what the CLI prints,
-and what a change writes are that one route. See [host.md](host.md), "An app's environment is two
-files, and the panel shows one".
+`/api/apps/<app>/environment/<kind>/<key>`. What the CLI prints and what a change writes are
+that one route. See [host.md](host.md), "An app's environment is two files".
 
 ## `mise run infra`
 
-`mise run infra <what> [app] [path]` asks the panel's address with the token mise decrypts, and
+`mise run infra <what> [app] [path] [--node <name>]` asks host over the tailnet, through the same
+SSH forward as `mise run node`, with the token mise decrypts, and
 prints the answer as a table: `mise run infra containers`, `mise run infra files geo`,
 `mise run infra env shot`. It is how an agent reads the node, and it is the first thing reached
 for, before SSH.

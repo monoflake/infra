@@ -104,6 +104,25 @@ impl Volumes {
 		std::os::unix::fs::chown(&data, Some(uid), Some(gid)).map_err(io(&data))
 	}
 
+	/// Delete the app's directory and every snapshot of it, where they exist. Nothing of what it
+	/// wrote is left.
+	pub async fn drop_app(&self, name: &str) -> Result<(), Error> {
+		let directory = self.snapshots.join(name);
+		if directory.exists() {
+			let mut entries = tokio::fs::read_dir(&directory).await.map_err(io(&directory))?;
+			while let Some(entry) = entries.next_entry().await.map_err(io(&directory))? {
+				let path = entry.path();
+				blocking(move || btrfs::delete(&path)).await?;
+			}
+			tokio::fs::remove_dir(&directory).await.map_err(io(&directory))?;
+		}
+		let root = self.root(name);
+		if root.exists() {
+			blocking(move || btrfs::delete(&root)).await?;
+		}
+		Ok(())
+	}
+
 	pub async fn prune(&self, name: &str) -> Result<(), Error> {
 		let directory = self.snapshots.join(name);
 		let mut entries = tokio::fs::read_dir(&directory).await.map_err(io(&directory))?;

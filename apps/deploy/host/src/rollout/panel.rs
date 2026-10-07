@@ -1,5 +1,5 @@
-//! What the panel can do to an app: redeploy, roll back, start, stop and restart. See
-//! spec/architecture/host.md, "What the panel can do to an app".
+//! What an operator can do to an app: redeploy, roll back, start, stop and restart. See
+//! spec/architecture/host.md, "What an operator can do to an app".
 
 use super::Error;
 use super::Outcome;
@@ -12,14 +12,13 @@ use deploy::manifest::Manifest;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// The platform's own five: the panel restarts them and never stops them, since each stopped takes
-/// the panel, the way in or the way back with it. See spec/architecture/host.md, "What the panel
-/// can do to an app".
-pub const PLATFORM: [&str; 5] = ["host", "keeper", "caddy", "tunnel", "panel"];
+/// The platform's own four: restarted and never stopped, since each stopped takes the way in or the
+/// way back with it. See spec/architecture/host.md, "What an operator can do to an app".
+pub const PLATFORM: [&str; 4] = ["host", "keeper", "caddy", "tunnel"];
 
-/// What a restart must not wait for: host answering the request, and Caddy and the panel carrying
-/// it. The panel is told first and the restart follows.
-pub(super) const ON_THE_WAY: [&str; 3] = ["host", "caddy", "panel"];
+/// What a restart must not wait for: host answering the request, and Caddy carrying it. The caller
+/// is told first and the restart follows.
+pub(super) const ON_THE_WAY: [&str; 2] = ["host", "caddy"];
 
 /// How long a restart on the way waits, so the answer saying it was asked has left.
 pub(super) const ANSWERED: std::time::Duration = std::time::Duration::from_millis(500);
@@ -40,8 +39,8 @@ pub async fn itself(host: &Host) -> Result<Option<Deployed>, Error> {
 }
 
 /// An app the panel may act on: one host runs, and not host itself, which cannot stop or replace
-/// the program answering the request. See spec/architecture/host.md, "What the panel can do to an
-/// app".
+/// the program answering the request. See spec/architecture/host.md, "What an operator can
+/// do to an app".
 pub(super) fn actionable(host: &Host, name: &str) -> Result<Deployed, Error> {
 	if name == "host" {
 		return Err(Error::Itself);
@@ -220,7 +219,7 @@ mod tests {
 
 	#[test]
 	fn the_platforms_own_are_restarted_and_never_stopped_or_started() {
-		for name in ["host", "keeper", "caddy", "tunnel", "panel"] {
+		for name in ["host", "keeper", "caddy", "tunnel"] {
 			assert!(permitted(name, Action::Restart).is_ok(), "{name}");
 			for action in [Action::Stop, Action::Start] {
 				assert!(matches!(permitted(name, action), Err(Error::Platform(_))), "{name}");

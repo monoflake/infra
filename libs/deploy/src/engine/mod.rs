@@ -307,6 +307,24 @@ impl Engine {
 		Ok(())
 	}
 
+	/// Take everyone off the app's network and remove it, where it exists.
+	pub async fn forget_network(&self, name: &str) -> Result<(), Error> {
+		let network = network_of(name);
+		let attached: Vec<String> = match self.docker.inspect_network(&network, None).await {
+			Ok(inspected) => {
+				inspected.containers.unwrap_or_default().into_values().filter_map(|c| c.name).collect()
+			}
+			Err(error) if absent(&error) => return Ok(()),
+			Err(error) => return Err(error.into()),
+		};
+		let members: Vec<&str> = attached.iter().map(String::as_str).collect();
+		self.leave(&network, &members).await?;
+		match self.docker.remove_network(&network).await {
+			Err(error) if !absent(&error) => Err(error.into()),
+			_ => Ok(()),
+		}
+	}
+
 	/// Remove one image. One a container uses is refused by Docker, and that refusal is the answer.
 	pub async fn remove_image(&self, id: &str) -> Result<(), Error> {
 		let options = RemoveImageOptionsBuilder::new().force(false).build();

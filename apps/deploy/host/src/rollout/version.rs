@@ -66,9 +66,9 @@ pub(super) async fn run_version(
 	let snapshot =
 		replace_beside(&host.engine, &host.volumes, &members, &shape, next, current, restore, beside)
 			.await?;
-	// The panel and a peer reach host on host's own network.
+	// A peer reaches host on host's own network.
 	let name = next.manifest.name.as_str();
-	if admitted(name, &shape) {
+	if admitted(&shape) {
 		host
 			.engine
 			.join(&deploy::engine::network_of(&host.config.own_container), &[name], false)

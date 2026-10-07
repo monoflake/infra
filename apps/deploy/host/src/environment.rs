@@ -1,6 +1,6 @@
 //! An app's environment: `config.env`, which the panel shows, and `secret.env`, which it names and
 //! never shows. Both sit in the app's subvolume, outside what its container mounts. See
-//! spec/architecture/host.md, "An app's environment is two files, and the panel shows one".
+//! spec/architecture/host.md, "An app's environment is two files".
 
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};

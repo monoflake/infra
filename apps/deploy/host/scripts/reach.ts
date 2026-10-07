@@ -1,6 +1,6 @@
 /**
- * `mise run reach [name]`: answer on `http://localhost:REACH_PORT` for `<name>.internal.ixc.one`,
- * which only the LAN reaches -- `panel` when no name is given. For a browser this machine refuses
+ * `mise run reach <name>`: answer on `http://localhost:REACH_PORT` for `<name>.internal.ixc.one`,
+ * which only the LAN reaches. For a browser this machine refuses
  * the local network to, which still reaches localhost. See spec/repository.md, "Reaching the LAN
  * from a browser that cannot".
  *
@@ -16,12 +16,12 @@ import { request as secure } from 'node:https';
 import { createServer as createProbe } from 'node:net';
 import { INFRA, REACH_PORT } from '@monoflake/urls';
 
+// Any name under the suffix resolves to the machine at home; host's door is one that always does.
 const HOME = new URL(INFRA.panel).hostname;
 const SUFFIX = HOME.slice(HOME.indexOf('.') + 1);
-// The panel's own label when none is given, which is `infra` and not the app's name.
-const name = process.argv[2] ?? HOME.slice(0, HOME.indexOf('.'));
+const name = process.argv[2] ?? '';
 if (!/^[a-z0-9-]+$/.test(name)) {
-	console.error('usage: reach [name]');
+	console.error('usage: reach <name>');
 	process.exit(1);
 }
 const TARGET = `${name}.${SUFFIX}`;

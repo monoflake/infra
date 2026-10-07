@@ -34,24 +34,19 @@ description = "Lint the Rust crates"
 # RUST_PACKAGES is `verify` naming the crates a change reached; run alone, it is every crate.
 run = 'cargo clippy ${RUST_PACKAGES:---workspace} --all-targets ${AUDIT:+-- -D warnings}'
 
-[tasks.check-panel]
-description = "Type check the panel, host's interface, a SvelteKit application of its own"
-dir = "apps/deploy/panel"
-run = 'pnpm run check ${AUDIT:+--fail-on-warnings}'
-
 [tasks.host]
-description = "Build an app for the machine at home: `host deploy <name>` hands it to host there"
+description = "Build an app for the machine at home: `host deploy <name>` hands it to host there over the tailnet"
 # Leaves this machine and stays there, like every other deploy. See spec/architecture/host.md.
 run = "node apps/deploy/host/scripts/host.ts"
 
 [tasks.infra]
-description = "Read the node over host's API: `infra <what> [app] [path]`, before reaching for SSH"
+description = "Read a node over host's API: `infra <what> [app] [path] [--node <name>]`, before reaching for a shell"
 # Read-only, so unlike `host` above it never writes off this machine. See
 # spec/architecture/inspect.md, "`mise run infra`".
 run = "node apps/deploy/host/scripts/infra.ts"
 
 [tasks.reach]
-description = "Answer on localhost for an interface only the LAN reaches: `reach [name]`, the panel by default"
+description = "Answer on localhost for an interface only the LAN reaches: `reach <name>`"
 run = "node apps/deploy/host/scripts/reach.ts"
 
 # The workspace's verbs reach these three; what each owes is in the workspace's repos spec, "What a

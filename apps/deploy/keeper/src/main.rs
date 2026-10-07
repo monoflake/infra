@@ -298,7 +298,7 @@ async fn replace_host(keeper: &Keeper, next: Version) -> Result<String, Reply> {
 	// declaration, beside the image it really runs.
 	let current = keeper.engine.current("host", &next.manifest).await.map_err(|e| internal(&e))?;
 	let env = deploy::read_env(&keeper.platform_env).map_err(|e| internal(&e))?;
-	// host's network is keeper's and the panel's; Caddy routes nothing to host.
+	// keeper joins host's network; Caddy is attached by host when it starts, for its door alone.
 	let members = [keeper.own_container.as_str()];
 	let shape = Shape::Platform { env };
 	let replaced =

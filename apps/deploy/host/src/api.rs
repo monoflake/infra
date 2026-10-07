@@ -24,7 +24,7 @@ use std::sync::Arc;
 pub fn router(host: Arc<Host>) -> Router {
 	let guarded = Router::new()
 		.route("/apps", get(apps))
-		.route("/apps/{name}", get(app).post(upload).layer(DefaultBodyLimit::disable()))
+		.route("/apps/{name}", get(app).post(upload).delete(remove).layer(DefaultBodyLimit::disable()))
 		.route("/apps/{name}/history", get(history))
 		.route("/events", get(events))
 		.route("/apps/{name}/redeploy", post(redeploy))
@@ -56,10 +56,10 @@ pub fn router(host: Arc<Host>) -> Router {
 		.route("/inspect/files/{app}/{*path}", get(inspect::files::nested))
 		.route("/inspect/kernel", get(inspect::kernel::get))
 		.layer(middleware::from_fn_with_state(host.clone(), admit));
-	// Everything the panel passes on is under `/api`, and `/notice` beside it; `/health` is keeper's.
-	// Nothing else reaches host. See spec/architecture/host.md, "The panel is an app of its own".
+	// Everything is under `/api`, and `/notice` beside it; `/health` is keeper's. Caddy passes on
+	// the notice and the reads alone, and the rest is asked over the tailnet. See
+	// spec/architecture/host.md, "host has no interface on the node, and a door Caddy keeps".
 	let api = Router::new()
-		.route("/session", post(sign_in).delete(sign_out))
 		.merge(guarded)
 		.fallback(|| async { response::failure(StatusCode::NOT_FOUND, "no_such_route") });
 	Router::new()
@@ -128,56 +128,12 @@ fn same(given: &[u8], expected: &[u8]) -> bool {
 		&& given.iter().zip(expected).fold(0, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
-/// The cookie the panel's session is: the token itself, out of a script's reach. See
-/// spec/architecture/host.md, "The panel signs in with the token, once".
-const SESSION: &str = "host_token";
-/// Thirty days, after which the panel asks again.
-const SESSION_SECONDS: u32 = 30 * 24 * 60 * 60;
-
 /// The token in a request's `Authorization` header.
 fn bearer(headers: &header::HeaderMap) -> Option<&str> {
 	headers
 		.get(header::AUTHORIZATION)
 		.and_then(|value| value.to_str().ok())
 		.and_then(|value| value.strip_prefix("Bearer "))
-}
-
-/// The token a request carries: its `Authorization` header, or the panel's cookie.
-fn carried(headers: &header::HeaderMap) -> &str {
-	let cookie = || {
-		headers
-			.get_all(header::COOKIE)
-			.iter()
-			.filter_map(|value| value.to_str().ok())
-			.flat_map(|value| value.split(';'))
-			.filter_map(|pair| pair.trim().split_once('='))
-			.find(|(name, _)| *name == SESSION)
-			.map(|(_, value)| value)
-	};
-	bearer(headers).or_else(cookie).unwrap_or_default()
-}
-
-#[derive(Deserialize)]
-struct SignIn {
-	token: String,
-}
-
-/// Sign the panel in: the token checked once, then kept as a cookie the browser sends and no
-/// script reads.
-async fn sign_in(State(host): State<Arc<Host>>, Json(asked): Json<SignIn>) -> Response {
-	if !same(asked.token.as_bytes(), host.config.token.as_bytes()) {
-		return response::failure(StatusCode::UNAUTHORIZED, "invalid_token");
-	}
-	let cookie = format!(
-		"{SESSION}={}; Path=/; Max-Age={SESSION_SECONDS}; HttpOnly; Secure; SameSite=Strict",
-		asked.token
-	);
-	([(header::SET_COOKIE, cookie)], response::success(StatusCode::OK, ())).into_response()
-}
-
-async fn sign_out() -> Response {
-	let cookie = format!("{SESSION}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict");
-	([(header::SET_COOKIE, cookie)], response::success(StatusCode::OK, ())).into_response()
 }
 
 /// Why a request's token does not admit it.
@@ -189,15 +145,16 @@ enum Refusal {
 	ReadOnly,
 }
 
-/// Whether a request is admitted: anything with the token, and a GET with the read token, which is
-/// taken from the header alone since the panel's cookie only ever holds the token.
+/// Whether a request is admitted: anything with the token, and a GET with the read token. Both come
+/// in the `Authorization` header and nowhere else.
 fn admission(
 	headers: &header::HeaderMap,
 	method: &Method,
 	token: &str,
 	read_token: Option<&str>,
 ) -> Result<(), Refusal> {
-	if same(carried(headers).as_bytes(), token.as_bytes()) {
+	let given = bearer(headers).unwrap_or_default();
+	if same(given.as_bytes(), token.as_bytes()) {
 		return Ok(());
 	}
 	let read = read_token
@@ -324,7 +281,9 @@ async fn events(State(host): State<Arc<Host>>, Query(page): Query<Page>) -> Resp
 /// A panel action's refusal, by what went wrong.
 fn refused(error: DeployError) -> Response {
 	let (status, code) = match &error {
-		DeployError::Itself | DeployError::Platform(_) => (StatusCode::FORBIDDEN, "invalid_target"),
+		DeployError::Itself | DeployError::Platform(_) | DeployError::Kept(_) => {
+			(StatusCode::FORBIDDEN, "invalid_target")
+		}
 		DeployError::NoSuchApp(_) => (StatusCode::NOT_FOUND, "no_such_app"),
 		DeployError::NoPrevious(_) => (StatusCode::CONFLICT, "no_such_version"),
 		DeployError::NoSnapshot(_) => (StatusCode::CONFLICT, "no_such_snapshot"),
@@ -363,6 +322,22 @@ async fn rollback(
 	Json(asked): Json<Rollback>,
 ) -> Response {
 	done(rollout::rollback(&host, &name, asked.with_data).await)
+}
+
+#[derive(Deserialize)]
+struct Removal {
+	/// `drop` deletes the app's directory and its snapshots too; anything else keeps them.
+	#[serde(default)]
+	data: Option<String>,
+}
+
+/// Take an app off the node, keeping its data unless `?data=drop`. See rollout/remove.rs.
+async fn remove(
+	State(host): State<Arc<Host>>,
+	Path(name): Path<String>,
+	Query(asked): Query<Removal>,
+) -> Response {
+	done(rollout::remove(&host, &name, asked.data.as_deref() == Some("drop")).await)
 }
 
 async fn start(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
@@ -799,20 +774,6 @@ mod tests {
 	}
 
 	#[test]
-	fn the_token_comes_from_the_header_or_the_panels_cookie() {
-		use axum::http::{HeaderMap, HeaderValue, header};
-		let mut headers = HeaderMap::new();
-		assert_eq!(super::carried(&headers), "");
-		headers.insert(header::COOKIE, HeaderValue::from_static("theme=dark; host_token=abc; x=1"));
-		assert_eq!(super::carried(&headers), "abc");
-		headers.insert(header::AUTHORIZATION, HeaderValue::from_static("Bearer xyz"));
-		assert_eq!(super::carried(&headers), "xyz");
-		let mut other = HeaderMap::new();
-		other.insert(header::COOKIE, HeaderValue::from_static("not_host_token=abc"));
-		assert_eq!(super::carried(&other), "");
-	}
-
-	#[test]
 	fn the_read_token_reads_from_the_header_alone_and_never_acts() {
 		use super::{Refusal, admission};
 		use axum::http::{HeaderMap, HeaderValue, Method, header};
@@ -827,12 +788,14 @@ mod tests {
 		assert_eq!(admitted(&read, Method::GET), Ok(()));
 		assert_eq!(admitted(&read, Method::POST), Err(Refusal::ReadOnly));
 		assert_eq!(admitted(&read, Method::DELETE), Err(Refusal::ReadOnly));
-		// The panel's cookie only ever holds the token, so the read token is not taken from one.
-		let cookie = with(header::COOKIE, "host_token=reader");
-		assert_eq!(admitted(&cookie, Method::GET), Err(Refusal::Unknown));
 		let full = with(header::AUTHORIZATION, "Bearer full");
 		assert_eq!(admitted(&full, Method::POST), Ok(()));
-		assert_eq!(admitted(&with(header::COOKIE, "host_token=full"), Method::PUT), Ok(()));
+		assert_eq!(admitted(&full, Method::DELETE), Ok(()));
+		// A cookie is no token: the panel that signed in with one has retired.
+		assert_eq!(
+			admitted(&with(header::COOKIE, "host_token=full"), Method::GET),
+			Err(Refusal::Unknown)
+		);
 		// Unset, there is no read token at all.
 		assert_eq!(admission(&read, &Method::GET, "full", None), Err(Refusal::Unknown));
 		assert_eq!(admission(&HeaderMap::new(), &Method::GET, "full", None), Err(Refusal::Unknown));

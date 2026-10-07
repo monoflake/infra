@@ -67,6 +67,8 @@ pub enum Action {
 	Start,
 	Stop,
 	Restart,
+	/// Taken off the node by hand; its history stays.
+	Remove,
 }
 
 /// How an event ended, or that it has not yet.
@@ -405,6 +407,11 @@ impl Store {
 		Ok(())
 	}
 
+	/// Take an app out of what runs now, its history left as it is. True when there was one.
+	pub fn forget_app(&self, name: &str) -> Result<bool, Error> {
+		Ok(lock(&self.apps).execute("DELETE FROM apps WHERE name = ?1", params![name])? > 0)
+	}
+
 	/// Hold an app stopped, or release it.
 	pub fn hold(&self, name: &str, held: bool) -> Result<(), Error> {
 		lock(&self.apps).execute("UPDATE apps SET held = ?2 WHERE name = ?1", params![name, held])?;
@@ -615,6 +622,19 @@ mod tests {
 		let app = store.app("geo").unwrap().unwrap();
 		assert_eq!(app.image, "sha256:b");
 		assert_eq!(app.previous, Some(first));
+	}
+
+	#[test]
+	fn a_removed_app_leaves_what_runs_and_keeps_its_history() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		store.put_app(&deployed("sha256:a", None)).unwrap();
+		let (run, done) = (Source::run(7, None), Outcome::Succeeded);
+		store.record("geo", Action::Deploy, &run, Some("sha256:a"), done, None).unwrap();
+		assert!(store.forget_app("geo").unwrap());
+		assert!(store.app("geo").unwrap().is_none());
+		assert!(!store.forget_app("geo").unwrap());
+		assert_eq!(store.events(Some("geo"), None, 10).unwrap().len(), 1);
 	}
 
 	#[test]
