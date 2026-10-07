@@ -14,6 +14,7 @@ into it".
 import base64
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
@@ -410,10 +411,25 @@ def emulation_refused(name, node):
 	return None
 
 
+# A failure domain as the platform's registry of providers writes it: a code of two or three
+# letters, and a number after it for a second account. See spec/architecture/nodes.md.
+DOMAIN = re.compile(r"[a-z]{2,3}(-[0-9]+)?")
+
+
+def domain_refused(name, node):
+	"""Why `node`'s `domain` is not a provider's code, or None when it is."""
+	domain = node.get("domain")
+	if isinstance(domain, str) and DOMAIN.fullmatch(domain):
+		return None
+	return f"{name}: domain is a provider's code like oci, az or oci-2, not {domain!r}"
+
+
 def load_nodes():
-	"""nodes.toml, every node's `emulate` checked before anything is asked of a machine."""
+	"""nodes.toml, every node's `domain` and `emulate` checked before anything is asked of a
+	machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
-	refused = [why for name, node in nodes.items() if (why := emulation_refused(name, node))]
+	checks = (domain_refused, emulation_refused)
+	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
 	if refused:
 		sys.exit("node: " + "\nnode: ".join(refused))
 	return nodes
