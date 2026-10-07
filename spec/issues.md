@@ -17,3 +17,15 @@ is allowed to go offline -- [architecture/nodes.md](architecture/nodes.md), `hom
 longer rare. The direction is the relay's ordered log, which a node that was away catches up on by
 comparing its place with any neighbor's -- platform's `spec/architecture/relay.md`. Whether host
 also asks GitHub on start, until the relay exists, is undecided.
+
+## An app's name is not tied to the repository that first deployed it
+
+host refuses only its reserved names, so once a second repository is a source -- web's, for the
+console's node build -- a run of it could ship `deploy-gateway-arm64` and replace the platform's
+gateway on a node. The platform's deployer ties each Worker's name to one `owner/repo`
+(platform's `spec/architecture/deployer.md`, "What it refuses"); host doing the same -- an app
+keeps the repository it was first deployed from, or an `APP_SOURCES` list in the node's `.env` --
+is decided in direction and not in shape: which of the two, and where the first deploy is recorded.
+It must land before web is admitted as a source. Also: host fetches with the monoflake-owned
+`GITHUB_ACTIONS_TOKEN`, and a canmi21 repository needs `GITHUB_ACTIONS_TOKEN_CANMI21`, picked by the
+source's owner.
