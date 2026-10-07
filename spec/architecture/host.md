@@ -152,7 +152,9 @@ machine's D-Bus socket; the reporter, which is given host's account of the servi
 meter's readings; the peer, which talks to the same app on every other node -- its declared port
 published on the machine at the same number on every address, which the firewall admits from the
 tailnet alone (see [nodes.md](nodes.md), "Nothing comes in but over the tailnet"), and joined to
-host's own network to read its node's host with the read token; the driver of a kind, whose image
+host's own network to read its node's host with the read token; a peer that names a `port` of its
+own in `[shape]` has that one published instead, and its declared port stays on the node for host
+to check, which is how the platform's Postgres publishes 5432 and keeps its keeper's HTTP to itself; the driver of a kind, whose image
 every sidecar of that kind runs; and a claim on hostnames, which Caddy routes and the resolver
 answers. An app asks in its `service.toml` --
 `[shape] kind = "scheduler"`, `[driver] provides = "objects"` -- and the node's `.env` grants, in

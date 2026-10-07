@@ -69,6 +69,10 @@ pub enum Invalid {
 	Unscheduled(String),
 	#[error("`[shape]` asks for `{0}`, and a role is one of scheduler, steward, reporter and peer")]
 	Shape(String),
+	#[error("`[shape]` names a port for a peer alone, and `{0}` is not one")]
+	ShapePort(String),
+	#[error("a peer's `[shape]` port {0} is 0 or its container's own, which it publishes anyway")]
+	PeerPort(u16),
 	#[error("`[driver]` provides `{0}`, and a driver is one of objects and postgres")]
 	Driver(String),
 }
@@ -202,6 +206,16 @@ impl Manifest {
 		if let Some(shape) = self.shape.as_ref().filter(|shape| !SHAPES.contains(&shape.kind.as_str()))
 		{
 			return Err(Invalid::Shape(shape.kind.clone()));
+		}
+		if let Some(shape) = &self.shape
+			&& let Some(port) = shape.port
+		{
+			if shape.kind != "peer" {
+				return Err(Invalid::ShapePort(shape.kind.clone()));
+			}
+			if port == 0 || container.port == Some(port) {
+				return Err(Invalid::PeerPort(port));
+			}
 		}
 		let provides = self.driver.as_ref().map(|driver| driver.provides.as_str());
 		if let Some(provides) = provides.filter(|provides| Driver::named(provides).is_none()) {

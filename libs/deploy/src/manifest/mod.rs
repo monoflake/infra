@@ -93,6 +93,11 @@ pub struct Manifest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ShapeRequest {
 	pub kind: String,
+	/// The port a peer publishes in place of its declared one, which then stays on the node for
+	/// host to check. A peer only. See spec/architecture/host.md, "A role is asked for by the app
+	/// and granted by the node".
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub port: Option<u16>,
 }
 
 /// A driver offered: the `[objects]` or `[postgres]` an app declares, which this image serves.

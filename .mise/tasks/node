@@ -182,6 +182,9 @@ GRANTS = {
 	"debian": ("relay:peer", "cron:scheduler", "apt:steward"),
 	"alpine": ("relay:peer", "cron:scheduler", "apk:steward"),
 }
+# What a core node grants besides: the platform's Postgres, a peer publishing 5432. See platform's
+# spec/architecture/databases.md, "Where it runs, and which one writes".
+CORE_GRANTS = ("database:peer",)
 # The private scopes host's Caddy sends to the gateway; see spec/architecture/host.md.
 PRIVATE_SCOPES = "ledger"
 # The secrets every node shares, in secrets.json under these names.
@@ -365,6 +368,11 @@ def apk_door():
 	return "\n".join(lines) + "\n"
 
 
+def grants(node):
+	"""The pairs host's `GRANTS` names on `node`: its family's, and the core's on a core node."""
+	return " ".join(GRANTS[node["system"]] + (CORE_GRANTS if node.get("core") else ()))
+
+
 def relay_peers(nodes):
 	"""Every node's relay by its tailnet address, in nodes.toml order; a relay skips its own."""
 	return " ".join(f"{name}={tailnet_ipv4(name)}:{RELAY_PORT}" for name in nodes)
@@ -490,7 +498,7 @@ def relay(where, name, nodes, peers, secrets_, dry):
 	"""Gives the relay peer, and host, what they read on one node. False when the node could not be
 	given it."""
 	slot = list(nodes).index(name)
-	grants = " ".join(GRANTS[nodes[name]["system"]])
+	wanted = grants(nodes[name])
 	if dry:
 		print(
 			f"node: {name}: would, on root@{where}:\n"
@@ -499,12 +507,12 @@ def relay(where, name, nodes, peers, secrets_, dry):
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES}\n"
-			f"    and {grants} added to GRANTS, the pairs already there kept"
+			f"    and {wanted} added to GRANTS, the pairs already there kept"
 		)
 		return True
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
-		f"{slot}\n{grants}\n{PRIVATE_SCOPES}\n"
+		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -527,7 +535,7 @@ def environment(name, nodes, token, read_token):
 		"NODE_SLOT": list(nodes).index(name),
 		"HOST_TOKEN": token,
 		"HOST_READ_TOKEN": read_token,
-		"GRANTS": " ".join(GRANTS[nodes[name]["system"]]),
+		"GRANTS": grants(nodes[name]),
 		"PRIVATE_SCOPES": PRIVATE_SCOPES,
 		"PRIVATE_SUFFIX": PRIVATE_SUFFIX,
 		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
@@ -578,7 +586,7 @@ def start_host(name, run, dry):
 			f"    PUBLIC_SUFFIX={PUBLIC_SUFFIX} PRIVATE_SOURCES={PRIVATE_SOURCES}\n"
 			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
 			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN,\n"
-			f"    GRANTS='{' '.join(GRANTS[nodes[name]['system']])}', ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
+			f"    GRANTS='{grants(nodes[name])}', ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
 		)

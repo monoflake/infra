@@ -2,7 +2,7 @@
 //! into a container. See spec/architecture/host.md, "What a deployment may ask for is host's
 //! decision".
 
-use super::{DEFAULT_MEMORY_MB, Engine, Error, VERSION_LABEL, Version, network_of};
+use super::{DEFAULT_MEMORY_MB, Engine, Error, Manifest, VERSION_LABEL, Version, network_of};
 use bollard::models::{
 	ContainerCreateBody, EndpointIpamConfig, EndpointSettings, HostConfig, HostConfigLogConfig,
 	Mount, MountType, PortBinding, RestartPolicy, RestartPolicyNameEnum,
@@ -51,7 +51,7 @@ pub enum Shape {
 	/// alone, and its configuration, which host writes, read-only. See spec/architecture/host.md,
 	/// "The resolver serves the house, and answers nothing of its own".
 	Resolver { env: Vec<String>, address: String },
-	/// The peer, the platform's relay: sandboxed like any app, its declared port published on the
+	/// The peer, the platform's relay: sandboxed like any app, `peer_port` published on the
 	/// machine at the same number, and joined to host's own network by host. See
 	/// spec/architecture/host.md, "A role is asked for by the app and granted by the node".
 	Peer { env: Vec<String> },
@@ -93,6 +93,14 @@ pub(super) fn peer_ports(port: u16) -> HashMap<String, Option<Vec<PortBinding>>>
 		host_port: Some(port.to_string()),
 	};
 	HashMap::from([(format!("{port}/tcp"), Some(vec![on("0.0.0.0"), on("::")]))])
+}
+
+/// The port the peer shape publishes: its `[shape]` port when it names one, its declared port
+/// otherwise. See spec/architecture/host.md, "A role is asked for by the app and granted by the
+/// node".
+pub(super) fn peer_port(manifest: &Manifest) -> Option<u16> {
+	let named = manifest.shape.as_ref().and_then(|shape| shape.port);
+	named.or_else(|| manifest.container.as_ref().and_then(|container| container.port))
 }
 
 /// Where the observer shape puts the machine's two kernel filesystems.
@@ -220,7 +228,7 @@ impl Engine {
 		// A ceiling on every container, and no swap past it: a limit that can be exceeded into swap
 		// is a slower machine rather than a limit. See spec/architecture/host.md.
 		let declared = manifest.container.as_ref().and_then(|container| container.memory_mb);
-		let declared_port = manifest.container.as_ref().and_then(|container| container.port);
+		let published_port = peer_port(manifest);
 		let memory = i64::from(declared.unwrap_or(DEFAULT_MEMORY_MB)) * 1024 * 1024;
 		let logs = HostConfigLogConfig { typ: Some("json-file".into()), config: None };
 		let restart =
@@ -278,7 +286,7 @@ impl Engine {
 			Shape::Reporter { env, meter } => (sandboxed(reporter_mounts(own, meter)), env.clone()),
 			Shape::Peer { env } => {
 				let config = HostConfig {
-					port_bindings: declared_port.map(peer_ports),
+					port_bindings: published_port.map(peer_ports),
 					..sandboxed(own.into_iter().collect())
 				};
 				(config, env.clone())
@@ -336,7 +344,7 @@ impl Engine {
 				Shape::Resolver { .. } => {
 					Some(RESOLVER_PORTS.iter().map(|(inside, _)| (*inside).to_owned()).collect())
 				}
-				Shape::Peer { .. } => declared_port.map(|port| vec![format!("{port}/tcp")]),
+				Shape::Peer { .. } => published_port.map(|port| vec![format!("{port}/tcp")]),
 				_ => None,
 			},
 			host_config: Some(host_config),

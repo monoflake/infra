@@ -352,6 +352,26 @@ fn a_role_or_a_driver_is_asked_for_by_a_word_the_node_knows() {
 }
 
 #[test]
+fn a_peer_alone_names_a_port_of_its_own_to_publish() {
+	let shaped = |shape: &str| Manifest::parse(&format!("{GEO}\n[shape]\n{shape}\n")).unwrap();
+	let relay = shaped("kind = \"peer\"");
+	assert_eq!(relay.shape.as_ref().and_then(|shape| shape.port), None);
+	let written: toml::Table = toml::to_string(&relay).unwrap().parse().unwrap();
+	assert!(!written["shape"].as_table().unwrap().contains_key("port"));
+	let database = shaped("kind = \"peer\"\nport = 5432");
+	assert_eq!(database.shape.as_ref().and_then(|shape| shape.port), Some(5432));
+	assert_eq!(database.check("geo", "rdu"), Ok(()));
+	let back = Manifest::parse(&toml::to_string(&database).unwrap()).unwrap();
+	assert_eq!(back.shape, database.shape);
+	let cron = shaped("kind = \"scheduler\"\nport = 5432");
+	assert_eq!(cron.check("geo", "rdu"), Err(Invalid::ShapePort("scheduler".into())));
+	let declared = Manifest::parse(GEO).unwrap().container.unwrap().port.unwrap();
+	let own = shaped(&format!("kind = \"peer\"\nport = {declared}"));
+	assert_eq!(own.check("geo", "rdu"), Err(Invalid::PeerPort(declared)));
+	assert_eq!(shaped("kind = \"peer\"\nport = 0").check("geo", "rdu"), Err(Invalid::PeerPort(0)));
+}
+
+#[test]
 fn a_schedule_declares_exactly_one_clock() {
 	let text = format!(
 		"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 4 * * *\"\nevery = \"1m\"\npath = \"/jobs/refresh\"\n"

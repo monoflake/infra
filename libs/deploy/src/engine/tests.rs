@@ -207,6 +207,23 @@ fn the_peer_shape_publishes_its_port_on_every_address_at_the_same_number() {
 }
 
 #[test]
+fn a_peer_publishes_its_shapes_port_in_place_of_its_declared_one() {
+	let geo = include_str!("../../fixtures/geo.toml");
+	let shaped = |shape: &str| {
+		crate::manifest::Manifest::parse(&format!("{geo}\n[shape]\nkind = \"peer\"\n{shape}\n"))
+			.unwrap()
+	};
+	let relay = shaped("");
+	let declared = relay.container.as_ref().and_then(|container| container.port);
+	assert!(declared.is_some());
+	assert_eq!(peer_port(&relay), declared);
+	let database = shaped("port = 5432");
+	assert_eq!(peer_port(&database), Some(5432));
+	let published = peer_ports(peer_port(&database).unwrap());
+	assert_eq!(published.keys().collect::<Vec<_>>(), ["5432/tcp"]);
+}
+
+#[test]
 fn a_container_is_dialed_on_its_own_network_and_no_other() {
 	assert_eq!(on_own_network("host", 11011), "host.app-host:11011");
 }
