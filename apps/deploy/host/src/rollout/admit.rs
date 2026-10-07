@@ -22,7 +22,7 @@ pub(super) const TAKEN: [&str; 5] = ["keeper", "meter", "caddy", "tunnel", RESOL
 pub(super) const RESOLVER: &str = "resolver";
 
 /// Whether host's own network admits an app run in `shape`: a peer, which reads its own node's
-/// host. Nothing else but keeper and Caddy joins it; see `attach`.
+/// host. Nothing else but keeper and Caddy joins it; see `attach`, and keeper's own start.
 pub(super) fn admitted(shape: &Shape) -> bool {
 	matches!(shape, Shape::Peer { .. })
 }

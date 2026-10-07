@@ -23,3 +23,8 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   elsewhere: a run of the platform's thirteen apps cost each small node minutes for the one it
   runs. CI uploads the declarations apart, small, and host fetches only what is placed on it --
   [architecture/host.md](architecture/host.md), "The machine pulls; nothing pushes into it".
+- **A new host, keeper or Caddy reaches one node first.** It goes to a canary node, which must
+  answer a notice through Caddy's door and keeper's before the rest take it -- the door that broke
+  on all seven nodes at once on 2026-10-07 would have stopped at one. And whatever must be true
+  between the node's own apps -- which networks Caddy and keeper share with host -- is put right
+  on every start, never left to the order things were deployed in.

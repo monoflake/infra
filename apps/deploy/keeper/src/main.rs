@@ -28,6 +28,12 @@ const PORT: u16 = 11010;
 /// host's port, which keeper passes a run on to; host's `service.toml` states it.
 const HOST_PORT: u16 = 11011;
 
+/// host as keeper dials it, on host's own network: keeper shares its own with host as well, where
+/// host does not listen. See `deploy::engine::on_own_network`.
+fn host_address() -> String {
+	deploy::engine::on_own_network("host", HOST_PORT)
+}
+
 struct Keeper {
 	node: String,
 	token: String,
@@ -68,6 +74,12 @@ async fn main() -> anyhow::Result<()> {
 		notices: std::sync::Mutex::default(),
 	});
 	deploy::clear_arrivals(&keeper.incoming)?;
+	// On host's own network every time it starts, as Caddy is: a keeper that host redeploys comes
+	// back on its own network alone, and replacing host joins it only once that begins.
+	let own = deploy::engine::network_of("host");
+	if let Err(error) = keeper.engine.join(&own, &[keeper.own_container.as_str()], false).await {
+		eprintln!("keeper: joining {own}: {error}");
+	}
 	let listen = setting("LISTEN", &format!("0.0.0.0:{PORT}"));
 	let guarded = Router::new()
 		.route("/apps/host", post(upload).layer(DefaultBodyLimit::disable()))
@@ -279,8 +291,7 @@ async fn from_run(keeper: &Keeper, repository: &str, run: u64) -> bool {
 async fn pass_on(repository: &str, run: u64) {
 	let notice = serde_json::json!({ "run": run, "repository": repository, "host_replaced": true });
 	let body = notice.to_string().into_bytes();
-	let address = format!("host:{HOST_PORT}");
-	match deploy::http::post(&address, "/notice", body).await {
+	match deploy::http::post(&host_address(), "/notice", body).await {
 		Ok(status) if (200..300).contains(&status) => {}
 		Ok(status) => eprintln!("keeper: run {run}: host answered {status} to the run passed on"),
 		Err(error) => eprintln!("keeper: run {run}: passing it on to host: {error}"),
@@ -347,6 +358,11 @@ mod tests {
 	fn host_is_where_host_declares_it() {
 		let declaration = include_str!("../../host/service.toml");
 		assert!(declaration.lines().any(|line| line.trim() == format!("port = {}", super::HOST_PORT)));
+	}
+
+	#[test]
+	fn host_is_reached_on_its_own_network() {
+		assert_eq!(super::host_address(), "host.app-host:11011");
 	}
 
 	#[test]

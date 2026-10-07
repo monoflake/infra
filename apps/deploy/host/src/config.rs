@@ -50,6 +50,8 @@ pub struct ResolverConfig {
 #[derive(Debug, Clone)]
 pub struct CaddyConfig {
 	pub container: String,
+	/// host, as Caddy dials it for the door; see `deploy::engine::on_own_network`.
+	pub host: String,
 	/// The admin socket, as this container sees it.
 	pub admin_socket: PathBuf,
 	/// The file Caddy starts from, as this container sees it.
@@ -97,12 +99,13 @@ impl Config {
 			.map_err(|e: std::net::AddrParseError| Missing::Unreadable("LISTEN", e.to_string()))?;
 		let apps_root = PathBuf::from(optional("APPS_ROOT", "/data/apps"));
 		let caddy_root = apps_root.join("caddy");
+		let own_container = optional("OWN_CONTAINER", "host");
 		Ok(Self {
 			node: required("NODE")?,
 			token: required("HOST_TOKEN")?,
 			read_token: std::env::var("HOST_READ_TOKEN").ok().filter(|value| !value.is_empty()),
 			listen,
-			own_container: optional("OWN_CONTAINER", "host"),
+			own_container: own_container.clone(),
 			snapshots_root: PathBuf::from(optional("SNAPSHOTS_ROOT", "/data/.snapshots")),
 			logs_root: PathBuf::from(optional("LOGS_ROOT", "/data/logs")),
 			state: apps_root.join("host").join("data"),
@@ -110,6 +113,7 @@ impl Config {
 			platform_env: apps_root.join("host").join(".env"),
 			caddy: CaddyConfig {
 				container: optional("CADDY_CONTAINER", "caddy"),
+				host: deploy::engine::on_own_network(&own_container, PORT),
 				// In Caddy's own directory, where host checks its health on it as on the meter's.
 				admin_socket: caddy_root.join("data").join("admin.sock"),
 				config_file: caddy_root.join("host").join("caddy.json"),

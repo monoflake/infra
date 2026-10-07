@@ -80,6 +80,13 @@ pub fn network_of(name: &str) -> String {
 	format!("app-{name}")
 }
 
+/// `name` at `port` as a container on its own network dials it: `<name>.<network>`, which Docker
+/// answers with the address on that network alone. The bare name answers with an address on
+/// whichever network the asker shares with it Docker picks, and host binds on its own alone.
+pub fn on_own_network(name: &str, port: u16) -> String {
+	format!("{name}.{}:{port}", network_of(name))
+}
+
 pub struct Engine {
 	docker: Docker,
 	/// A member, and the names it answers by besides its own on every app's network.

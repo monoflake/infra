@@ -184,3 +184,8 @@ fn the_peer_shape_publishes_its_port_on_every_address_at_the_same_number() {
 	assert!(bindings.iter().all(|binding| binding.host_port.as_deref() == Some("20800")));
 	assert!(Shape::Peer { env: vec![] }.networked());
 }
+
+#[test]
+fn a_container_is_dialed_on_its_own_network_and_no_other() {
+	assert_eq!(on_own_network("host", 11011), "host.app-host:11011");
+}

@@ -100,7 +100,7 @@ pub async fn replace_beside(
 	let checked = match beside_next {
 		Err(reason) => Err(reason),
 		Ok(()) => match engine.run(next, shape, &volumes.data(name)).await {
-			Ok(()) => healthy(engine, next, &volumes.data(name)).await,
+			Ok(()) => healthy(engine, next, shape, &volumes.data(name)).await,
 			Err(error) => Err(error.to_string()),
 		},
 	};
@@ -189,15 +189,26 @@ async fn make(directory: &Path, owner: Option<(u32, u32)>) -> Result<(), Error> 
 	Ok(())
 }
 
+/// Where a health check dials `name` at `port`: on its own network when it has one, since the
+/// checker may share several with it; see `on_own_network`.
+fn checked_at(name: &str, port: u16, shape: &Shape) -> String {
+	if shape.networked() { engine::on_own_network(name, port) } else { format!("{name}:{port}") }
+}
+
 /// Poll the declared path until it answers 2xx, the container exits, or the deadline passes. An app
 /// on a socket is asked there, in `data`, its directory as the machine sees it.
-async fn healthy(engine: &Engine, version: &Version, data: &Path) -> Result<(), String> {
+async fn healthy(
+	engine: &Engine,
+	version: &Version,
+	shape: &Shape,
+	data: &Path,
+) -> Result<(), String> {
 	let Some(container) = &version.manifest.container else {
 		return Err("the declaration has no container to check".into());
 	};
 	let deadline = container.health_timeout.map_or(DEFAULT_DEADLINE, Duration::from_secs);
 	let socket = container.socket.as_ref().map(|socket| data.join(socket));
-	let address = format!("{}:{}", version.manifest.name, container.port.unwrap_or_default());
+	let address = checked_at(&version.manifest.name, container.port.unwrap_or_default(), shape);
 	let started = tokio::time::Instant::now();
 	let mut last = String::from("no answer yet");
 	while started.elapsed() < deadline {
@@ -216,4 +227,19 @@ async fn healthy(engine: &Engine, version: &Version, data: &Path) -> Result<(), 
 		tokio::time::sleep(Duration::from_secs(1)).await;
 	}
 	Err(format!("not healthy within {} seconds: {last}", deadline.as_secs()))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::checked_at;
+	use crate::engine::Shape;
+
+	#[test]
+	fn a_networked_app_is_checked_on_its_own_network_and_the_rest_by_name() {
+		// keeper checking host shares app-keeper and app-host with it, and host binds on app-host.
+		let platform = Shape::Platform { env: vec![] };
+		assert_eq!(checked_at("host", 11011, &platform), "host.app-host:11011");
+		let edge = Shape::Edge { env: vec![] };
+		assert_eq!(checked_at("caddy", 2019, &edge), "caddy:2019");
+	}
 }

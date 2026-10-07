@@ -307,19 +307,19 @@ const DOOR_READS: &str = concat!(
 );
 
 /// host at `<DOOR>.<suffix>`, by the allowlist above and nothing else: a 404 for the rest. Caddy
-/// adds no authentication; host's own tokens are the only check, carried through untouched.
-fn door(name: String) -> Value {
-	let host = format!("host:{}", crate::config::PORT);
+/// adds no authentication; host's own tokens are the only check, carried through untouched. host
+/// is dialed by its name on its own network; see `deploy::engine::on_own_network`.
+fn door(name: String, host: &str) -> Value {
 	json!({
 		"match": [{ "host": [name.clone()] }],
 		"handle": [{ "handler": "subroute", "routes": [
 			{
 				"match": [{ "method": ["POST"], "path": ["/notice"] }],
-				"handle": [encode(), proxy(&host, &name)]
+				"handle": [encode(), proxy(host, &name)]
 			},
 			{
 				"match": [{ "method": ["GET"], "path_regexp": { "pattern": DOOR_READS } }],
-				"handle": [encode(), proxy(&host, &name)]
+				"handle": [encode(), proxy(host, &name)]
 			},
 			{ "handle": [{ "handler": "static_response", "status_code": 404 }] }
 		]}]
@@ -375,7 +375,7 @@ fn private_side(
 
 	let mut inside = vec![refuse_unless(&config.private_sources)];
 	inside.push(api_host(format!("api.{private}"), apps, Side::Private));
-	inside.push(door(format!("{DOOR}.{private}")));
+	inside.push(door(format!("{DOOR}.{private}"), &config.host));
 	for target in interfaces(apps, routes, false) {
 		inside.push(named(format!("{}.{private}", target.name), &target));
 	}
@@ -416,7 +416,7 @@ pub fn render(config: &CaddyConfig, apps: &[Deployed], routes: &[Route], lan: bo
 
 	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
 	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel));
-	outside.push(door(format!("{DOOR}.{public}")));
+	outside.push(door(format!("{DOOR}.{public}"), &config.host));
 	for target in interfaces(apps, routes, true) {
 		outside.push(named(format!("{}.{public}", target.name), &target));
 	}
@@ -489,6 +489,7 @@ mod tests {
 	fn config() -> CaddyConfig {
 		CaddyConfig {
 			container: "caddy".into(),
+			host: deploy::engine::on_own_network("host", crate::config::PORT),
 			admin_socket: "/nowhere/admin.sock".into(),
 			config_file: "/nowhere/caddy.json".into(),
 			admin_listen: "unix//data/admin.sock".into(),
@@ -829,7 +830,7 @@ mod tests {
 			assert_eq!(routes[0]["match"][0], json!({ "method": ["POST"], "path": ["/notice"] }));
 			assert_eq!(routes[1]["match"][0]["method"], json!(["GET"]));
 			assert_eq!(routes[2]["handle"][0]["status_code"], 404);
-			assert_eq!(text(&routes).matches(r#""dial":"host:11011""#).count(), 2);
+			assert_eq!(text(&routes).matches(r#""dial":"host.app-host:11011""#).count(), 2);
 			// No token of Caddy's own: what the caller sent reaches host as it was.
 			assert!(!text(&routes).contains("Authorization"));
 		}
@@ -924,11 +925,11 @@ mod tests {
 			// host's door, ahead of every label an app or a route answers on.
 			r#"{"handle":[{"handler":"subroute","routes":[{"handle":[{"encodings":{"gzip":{},"#,
 			r#""zstd":{}},"handler":"encode","prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
-			r#""upstreams":[{"dial":"host:11011"}]}],"#,
+			r#""upstreams":[{"dial":"host.app-host:11011"}]}],"#,
 			r#""match":[{"method":["POST"],"path":["/notice"]}]},"#,
 			r#"{"handle":[{"encodings":{"gzip":{},"zstd":{}},"handler":"encode","#,
 			r#""prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
-			r#""upstreams":[{"dial":"host:11011"}]}],"match":[{"method":["GET"],"#,
+			r#""upstreams":[{"dial":"host.app-host:11011"}]}],"match":[{"method":["GET"],"#,
 			r#""path_regexp":{"pattern":"^/api/(node/(now|series)|apps|apps/[^/]+|"#,
 			r#"apps/[^/]+/(history|metrics/series)|events|inspect/disk)$"}}]},"#,
 			r#"{"handle":[{"handler":"static_response","status_code":404}]}]}],"#,
