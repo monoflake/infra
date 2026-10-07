@@ -72,6 +72,11 @@ pub enum Error {
 	Driver(String),
 	#[error(transparent)]
 	Refused(#[from] crate::grants::Refused),
+	#[error(
+		"`{app}` asks for {arch}, and this {native} node runs it neither natively nor by emulation: \
+		 its host was given no EMULATE={arch}"
+	)]
+	Unrunnable { app: String, arch: String, native: String },
 }
 
 /// Where `manifest`'s health is asked on this node, exactly as its deploy's check asks it; none for

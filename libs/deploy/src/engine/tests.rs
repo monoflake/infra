@@ -227,3 +227,12 @@ fn a_peer_publishes_its_shapes_port_in_place_of_its_declared_one() {
 fn a_container_is_dialed_on_its_own_network_and_no_other() {
 	assert_eq!(on_own_network("host", 11011), "host.app-host:11011");
 }
+
+#[test]
+fn a_container_is_asked_for_as_the_platform_its_app_asks_for() {
+	let pinned = create_options("database", Some("linux/arm64"));
+	assert_eq!((pinned.name.as_deref(), pinned.platform.as_str()), (Some("database"), "linux/arm64"));
+	// Asked for nothing, Docker picks the image's own as it always did.
+	let native = create_options("geo", None);
+	assert_eq!((native.name.as_deref(), native.platform.as_str()), (Some("geo"), ""));
+}

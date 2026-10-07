@@ -219,6 +219,10 @@ struct Shown {
 	driver: bool,
 	/// How a new version takes its place, `replace` when its declaration says nothing.
 	rollout: Rollout,
+	/// The architecture its image runs as: the one it asks for, or the node's own.
+	arch: Option<String>,
+	/// Whether that is not the node's own, so it runs emulated.
+	emulated: bool,
 }
 
 async fn shown(host: &Host, app: Deployed) -> Shown {
@@ -227,7 +231,10 @@ async fn shown(host: &Host, app: Deployed) -> Shown {
 	let platform = rollout::PLATFORM.contains(&app.manifest.name.as_str());
 	let driver = host.config.grants.driver_of(&app.manifest).is_some();
 	let rollout = app.manifest.rollout;
-	Shown { app, running, restorable, platform, driver, rollout }
+	let native = host.config.native;
+	let arch = app.manifest.arch.clone().or_else(|| native.map(str::to_owned));
+	let emulated = arch.as_deref() != native;
+	Shown { app, running, restorable, platform, driver, rollout, arch, emulated }
 }
 
 /// Every app the store holds, and host itself among them, read from its container.
@@ -371,6 +378,7 @@ fn refused(error: DeployError) -> Response {
 			(StatusCode::BAD_GATEWAY, "docker_unavailable")
 		}
 		DeployError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable"),
+		DeployError::Unrunnable { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_declaration"),
 		_ => (StatusCode::INTERNAL_SERVER_ERROR, "service_unavailable"),
 	};
 	failed(status, code, error)
@@ -479,7 +487,7 @@ async fn upload(
 	}
 	match rollout::from_archive(&host, &name, manifest, &archive, &Source::upload()).await {
 		Ok(outcome) => response::success(StatusCode::OK, outcome),
-		Err(error @ DeployError::Invalid(_)) => {
+		Err(error @ (DeployError::Invalid(_) | DeployError::Unrunnable { .. })) => {
 			failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_declaration", error)
 		}
 		Err(error @ DeployError::PortTaken { .. }) => {

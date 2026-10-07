@@ -505,6 +505,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "toml",
  "tower",
  "url",
 ]

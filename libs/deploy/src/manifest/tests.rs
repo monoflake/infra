@@ -535,3 +535,24 @@ fn beside_needs_room_in_a_name_for_the_version_beside_it() {
 	long.name = "a".repeat(58);
 	assert_eq!(long.check(&"a".repeat(58), "rdu"), Ok(()));
 }
+
+#[test]
+fn an_app_asks_for_arm64_or_for_nothing() {
+	let geo = Manifest::parse(GEO).unwrap();
+	assert_eq!((geo.arch.as_deref(), geo.platform()), (None, None));
+	let written: toml::Table = toml::to_string(&geo).unwrap().parse().unwrap();
+	assert!(!written.contains_key("arch"));
+	let asked = |arch: &str| {
+		let text = GEO.replacen("version = 1", &format!("version = 1\narch = \"{arch}\""), 1);
+		Manifest::parse(&text).unwrap()
+	};
+	let arm64 = asked("arm64");
+	assert_eq!(arm64.check("geo", "rdu"), Ok(()));
+	assert_eq!(arm64.platform().as_deref(), Some("linux/arm64"));
+	let back = Manifest::parse(&toml::to_string(&arm64).unwrap()).unwrap();
+	assert_eq!(back.arch.as_deref(), Some("arm64"));
+	// Nothing emulates x86 on arm64, so no app may ask for it, nor for what no node runs.
+	for refused in ["amd64", "riscv64", "linux/arm64", ""] {
+		assert_eq!(asked(refused).check("geo", "rdu"), Err(Invalid::Arch(refused.into())), "{refused}");
+	}
+}

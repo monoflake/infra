@@ -35,6 +35,38 @@ pub struct Config {
 	pub resolver: ResolverConfig,
 	/// The roles the node grants beyond a sandbox, from `GRANTS`; none when it is unset.
 	pub grants: crate::grants::Grants,
+	/// The architectures the node runs by emulation, from `EMULATE`; none when it is unset. See
+	/// spec/architecture/nodes.md, "An x86 node may run arm64 images, emulated, and never the other
+	/// way".
+	pub emulate: Vec<String>,
+	/// The architecture this node runs natively, as an artifact name spells it.
+	pub native: Option<&'static str>,
+}
+
+/// `EMULATE` read: architectures separated by whitespace, of those an app may ask for. Anything
+/// else is a `.env` this host cannot use.
+pub fn emulated(value: &str) -> Result<Vec<String>, String> {
+	value
+		.split_whitespace()
+		.map(|arch| {
+			let known = deploy::manifest::ARCHES.contains(&arch);
+			if known { Ok(arch.to_owned()) } else { Err(arch.to_owned()) }
+		})
+		.collect()
+}
+
+/// Whether a node of `native` architecture, emulating `emulate`, runs an image built for `arch`:
+/// its own, or arm64 emulated on x86 and never the other way.
+pub fn runs(native: Option<&str>, emulate: &[String], arch: &str) -> bool {
+	native == Some(arch)
+		|| (native == Some("amd64") && emulate.iter().any(|emulated| emulated == arch))
+}
+
+impl Config {
+	/// Whether this node runs an image built for `arch`.
+	pub fn runs(&self, arch: &str) -> bool {
+		runs(self.native, &self.emulate, arch)
+	}
 }
 
 /// The house's DNS: where host writes its configuration, the node's LAN address it publishes DNS
@@ -154,6 +186,10 @@ impl Config {
 			},
 			grants: crate::grants::Grants::parse(&optional("GRANTS", ""))
 				.map_err(|pair| Missing::Unreadable("GRANTS", format!("`{pair}` is not app:role")))?,
+			native: deploy::github::node_arch(),
+			emulate: emulated(&optional("EMULATE", "")).map_err(|arch| {
+				Missing::Unreadable("EMULATE", format!("`{arch}` is not an architecture to emulate"))
+			})?,
 			apps_root,
 		})
 	}
@@ -161,6 +197,32 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn an_x86_node_emulates_arm64_when_told_and_nothing_emulates_x86() {
+		use super::{emulated, runs};
+		let arm64 = emulated("arm64").unwrap();
+		assert_eq!(emulated(""), Ok(vec![]));
+		assert_eq!(emulated("amd64"), Err("amd64".into()));
+		assert_eq!(emulated("arm64 riscv64"), Err("riscv64".into()));
+		assert!(runs(Some("amd64"), &arm64, "arm64"));
+		assert!(!runs(Some("amd64"), &[], "arm64"));
+		assert!(runs(Some("arm64"), &[], "arm64"));
+		assert!(runs(Some("amd64"), &[], "amd64"));
+		assert!(!runs(Some("arm64"), &["amd64".into()], "amd64"));
+		assert!(!runs(None, &arm64, "arm64"));
+	}
+
+	#[test]
+	fn every_node_emulates_only_what_host_takes() {
+		let nodes: toml::Table = include_str!("../../../../nodes/nodes.toml").parse().unwrap();
+		for (name, node) in nodes {
+			let Some(emulate) = node.get("emulate") else { continue };
+			let words: Vec<&str> =
+				emulate.as_array().unwrap().iter().map(|arch| arch.as_str().unwrap()).collect();
+			assert_eq!(super::emulated(&words.join(" ")), Ok(vec!["arm64".to_owned()]), "{name}");
+		}
+	}
+
 	#[test]
 	fn the_port_is_the_one_the_declaration_states() {
 		let declaration = include_str!("../service.toml");

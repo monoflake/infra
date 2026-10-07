@@ -90,7 +90,17 @@ pub struct Manifest {
 	/// How a new version takes the old one's place; `replace` when absent, and left out when it is.
 	#[serde(default, skip_serializing_if = "Rollout::is_replace")]
 	pub rollout: Rollout,
+	/// The one architecture its image is run as on every node, emulated where the node is not it;
+	/// one of [`ARCHES`]. Absent, a node runs the image of its own. See spec/architecture/host.md,
+	/// "An app may ask for one architecture".
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub arch: Option<String>,
 }
+
+/// The architectures an app may ask for: arm64 alone, which an x86 node can emulate and nothing
+/// emulates the other way. See spec/architecture/nodes.md, "An x86 node may run arm64 images,
+/// emulated, and never the other way".
+pub const ARCHES: [&str; 1] = ["arm64"];
 
 /// How a new version of an app takes the old one's place. See spec/architecture/host.md, "An app
 /// chooses how it is rolled out, and keeping nothing earns a gapless one".
@@ -147,6 +157,11 @@ impl Manifest {
 	/// The drivers it declares, each run beside it as a sidecar.
 	pub fn drivers(&self) -> impl Iterator<Item = Driver> + '_ {
 		Driver::ALL.into_iter().filter(|driver| driver.declared(self))
+	}
+
+	/// The platform Docker is asked to run its image as, when it asks for an architecture.
+	pub fn platform(&self) -> Option<String> {
+		self.arch.as_ref().map(|arch| format!("linux/{arch}"))
 	}
 
 	/// The containers its sidecars run in, one per driver it declares.

@@ -85,6 +85,8 @@ pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
 			upstreams: vec![],
 		},
 		grants: grants::Grants::default(),
+		emulate: vec![],
+		native: Some("amd64"),
 		apps_root: apps_root.clone(),
 	};
 	Arc::new(Host {

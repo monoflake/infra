@@ -40,6 +40,16 @@ pub(super) fn admits(host: &Host, manifest: &Manifest) -> bool {
 /// stand on the edge. A granted driver runs no container, so has none either.
 pub(super) const UNNETWORKED: [&str; 3] = ["meter", "caddy", "tunnel"];
 
+/// Refuse an app that asks for an architecture this node runs neither natively nor by emulation.
+/// See spec/architecture/host.md, "An app may ask for one architecture".
+pub(super) fn runnable(host: &Host, manifest: &Manifest) -> Result<(), Error> {
+	let Some(arch) = manifest.arch.as_deref().filter(|arch| !host.config.runs(arch)) else {
+		return Ok(());
+	};
+	let native = host.config.native.unwrap_or("unknown").to_owned();
+	Err(Error::Unrunnable { app: manifest.name.clone(), arch: arch.to_owned(), native })
+}
+
 /// Refuse what could not be run before anything is stopped.
 pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Error> {
 	deployable(requested)?;
@@ -53,6 +63,7 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 	};
 	// Refused before anything is stopped, as everything here is.
 	host.config.grants.shape_of(manifest)?;
+	runnable(host, manifest)?;
 	for driver in manifest.drivers() {
 		if sidecars::driver(host, driver)?.is_none() {
 			return Err(Error::NoDriver(manifest.name.clone(), driver.name()));

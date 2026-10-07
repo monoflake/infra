@@ -3,7 +3,7 @@
 
 use super::Error;
 use super::Outcome;
-use super::admit::{RESOLVER, admit, admitted};
+use super::admit::{RESOLVER, admit, admitted, runnable};
 use super::beside::{self, Plan};
 use super::route::{attach, route};
 use super::shape::{bound, shape_of};
@@ -30,6 +30,8 @@ pub(super) async fn run_version(
 	current: Option<&Version>,
 	restore: Option<&Path>,
 ) -> Result<Option<PathBuf>, Error> {
+	// A redeploy or a rollback is admitted by nothing else, and the node may have stopped emulating.
+	runnable(host, &next.manifest)?;
 	if let Some(kind) = host.config.grants.driver_of(&next.manifest) {
 		drive(host, kind, next, current).await?;
 		return Ok(None);
@@ -256,9 +258,53 @@ pub(super) async fn collect(host: &Host) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-	use super::staged;
+	use super::{runnable, staged};
 	use crate::rollout::Error;
 	use crate::store::{Action, Outcome, Source, Stage, Store};
+
+	#[tokio::test]
+	async fn an_app_asking_for_arm64_is_refused_where_nothing_runs_it_before_anything_loads() {
+		let directory = tempfile::tempdir().unwrap();
+		// The testing host is an x86 node given no EMULATE.
+		let host = crate::testing(directory.path());
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"database\"\narch = \"arm64\"\nplacements = [\"rdu\"]\n\
+			 [container]\nport = 25432\nhealth = \"/health\"\n",
+		)
+		.unwrap();
+		let archive = directory.path().join("never-read.tar");
+		let refused =
+			super::from_archive(&host, "database", manifest, &archive, &Source::upload()).await;
+		let Err(error @ Error::Unrunnable { .. }) = refused else { panic!("{refused:?}") };
+		assert!(error.to_string().contains("EMULATE=arm64"), "{error}");
+		let [event] = host.store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Failed, Some(Stage::Admitting)));
+		assert_eq!(event.detail, Some(error.to_string()));
+		assert!(host.store.app("database").unwrap().is_none());
+	}
+
+	#[test]
+	fn a_node_runs_arm64_natively_or_emulated_and_its_own_always() {
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let pinned = |arch: Option<&str>| {
+			let mut manifest = deploy::Manifest::parse(
+				"version = 1\nname = \"database\"\nplacements = [\"rdu\"]\n[container]\n\
+				 port = 25432\nhealth = \"/health\"\n",
+			)
+			.unwrap();
+			manifest.arch = arch.map(str::to_owned);
+			manifest
+		};
+		assert!(matches!(runnable(&host, &pinned(Some("arm64"))), Err(Error::Unrunnable { .. })));
+		assert!(runnable(&host, &pinned(None)).is_ok());
+		let mut emulating = host.config.clone();
+		emulating.emulate = vec!["arm64".into()];
+		assert!(emulating.runs("arm64"));
+		emulating.native = Some("arm64");
+		emulating.emulate = vec![];
+		assert!(emulating.runs("arm64") && !emulating.runs("amd64"));
+	}
 
 	#[tokio::test]
 	async fn a_load_that_fails_closes_its_event_failed_at_loading() {

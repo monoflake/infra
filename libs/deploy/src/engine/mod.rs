@@ -78,6 +78,20 @@ pub fn numeric_user(user: &str) -> Option<(u32, u32)> {
 	(uid != 0).then_some((uid, gid))
 }
 
+/// How a container is asked for: under `name`, and as `platform` when one is asked, which an
+/// emulated architecture needs; Docker would otherwise pick the image's own with a warning. See
+/// spec/architecture/host.md, "An app may ask for one architecture".
+pub(crate) fn create_options(
+	name: &str,
+	platform: Option<&str>,
+) -> bollard::query_parameters::CreateContainerOptions {
+	let options = CreateContainerOptionsBuilder::new().name(name);
+	match platform {
+		Some(platform) => options.platform(platform).build(),
+		None => options.build(),
+	}
+}
+
 pub fn network_of(name: &str) -> String {
 	format!("app-{name}")
 }
@@ -273,7 +287,7 @@ impl Engine {
 	/// which has to exist already.
 	pub async fn run_sidecar(&self, sidecar: &Sidecar) -> Result<(), Error> {
 		self.remove(&sidecar.name).await?;
-		let options = CreateContainerOptionsBuilder::new().name(&sidecar.name).build();
+		let options = create_options(&sidecar.name, sidecar.platform.as_deref());
 		self.docker.create_container(Some(options), sidecar.body()).await?;
 		self.docker.start_container(&sidecar.name, None).await?;
 		Ok(())

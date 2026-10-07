@@ -2,7 +2,7 @@
 //! spec/architecture/host.md, "What a deployment may ask for is host's decision".
 
 use super::{
-	Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
+	ARCHES, Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
 	RESERVED_LABELS, Rollout, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron,
 	is_every, is_home,
 };
@@ -91,6 +91,8 @@ pub enum Invalid {
 	BesideRole(String),
 	#[error("`{0}` is infra's own, shaped by its name, and is replaced in place")]
 	BesideOwn(String),
+	#[error("`arch` asks for `{0}`, and the one architecture an app may ask for is arm64")]
+	Arch(String),
 	#[error("`{0}` is too long to run beside itself under a name of its own, at most 63 characters")]
 	BesideName(String),
 }
@@ -132,6 +134,9 @@ impl Manifest {
 		}
 		if let Some(shown) = self.display_name.as_ref().filter(|shown| !sound_display_name(shown)) {
 			return Err(Invalid::DisplayName(shown.clone()));
+		}
+		if let Some(arch) = self.arch.as_ref().filter(|arch| !ARCHES.contains(&arch.as_str())) {
+			return Err(Invalid::Arch(arch.clone()));
 		}
 		if !self.placements.iter().any(|placement| placement == node) {
 			return Err(Invalid::NotPlaced { name: self.name.clone(), node: node.into() });

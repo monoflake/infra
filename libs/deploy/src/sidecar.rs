@@ -138,6 +138,8 @@ pub struct Sidecar {
 	pub user: Option<(u32, u32)>,
 	/// Paths it writes beside its data, each a tmpfs as `/tmp` is.
 	pub scratch: Vec<String>,
+	/// The platform its driver's image is run as, when the driver asks for an architecture.
+	pub platform: Option<String>,
 }
 
 /// The label a sidecar carries the name of the app it serves in.
@@ -235,6 +237,7 @@ mod tests {
 			memory_mb: None,
 			user: driver.user(),
 			scratch: driver.scratch().iter().map(|path| (*path).to_owned()).collect(),
+			platform: None,
 		}
 	}
 

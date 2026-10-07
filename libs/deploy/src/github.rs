@@ -59,11 +59,22 @@ pub struct Run {
 	pub head_sha: Option<String>,
 }
 
-/// What a run built: its commit, and the artifacts it left.
+/// What a run built: its commit, and the artifacts it left for this node's architecture and for
+/// the others.
 #[derive(Debug)]
 pub struct Built {
 	pub commit: Option<String>,
 	pub artifacts: Vec<Artifact>,
+	pub others: Vec<Artifact>,
+}
+
+impl Built {
+	/// The run's image of `app` for `arch`, whichever architecture this node runs. An app that asks
+	/// for an architecture is fetched in it. See spec/architecture/host.md, "An app may ask for one
+	/// architecture".
+	pub fn built_for(&self, app: &str, arch: &str) -> Option<&Artifact> {
+		self.artifacts.iter().chain(&self.others).find(|built| built.app == app && built.arch == arch)
+	}
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,7 +248,7 @@ impl GitHub {
 		check(run, &record, repository)?;
 		let path = format!("/actions/runs/{run}/artifacts?per_page=100");
 		let listed: Listed = self.json(repository, &path).await?;
-		let artifacts = listed
+		let (artifacts, others) = listed
 			.artifacts
 			.into_iter()
 			.filter(|record| !record.expired)
@@ -251,9 +262,8 @@ impl GitHub {
 					digest: record.digest?,
 				})
 			})
-			.filter(|artifact| Some(artifact.arch) == node_arch())
-			.collect();
-		Ok(Built { commit: record.head_sha, artifacts })
+			.partition(|artifact| Some(artifact.arch) == node_arch());
+		Ok(Built { commit: record.head_sha, artifacts, others })
 	}
 
 	/// Download `artifact` into `directory`, hold it to its digest, and take out what CI put in it.
@@ -393,6 +403,28 @@ mod tests {
 		assert_eq!(of("deploy-api"), None);
 		assert_eq!(of("other-geo-arm64"), None);
 		assert_eq!(of("other-geo"), None);
+	}
+
+	#[test]
+	fn an_app_asking_for_an_architecture_is_found_in_it_whichever_this_node_runs() {
+		let artifact = |app: &str, arch: &'static str| Artifact {
+			app: app.into(),
+			arch,
+			repository: "monoflake/platform".into(),
+			id: 1,
+			digest: String::new(),
+		};
+		let built = Built {
+			commit: None,
+			artifacts: vec![artifact("database", "amd64"), artifact("geo", "amd64")],
+			others: vec![artifact("database", "arm64")],
+		};
+		let found =
+			|app, arch| built.built_for(app, arch).map(|artifact| (artifact.app.as_str(), artifact.arch));
+		assert_eq!(found("database", "arm64"), Some(("database", "arm64")));
+		assert_eq!(found("database", "amd64"), Some(("database", "amd64")));
+		assert_eq!(found("geo", "arm64"), None);
+		assert_eq!(found("cron", "arm64"), None);
 	}
 
 	#[test]

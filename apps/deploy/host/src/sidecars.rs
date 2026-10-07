@@ -70,6 +70,7 @@ pub fn sidecar_of(
 		memory_mb,
 		user: kind.user(),
 		scratch: Vec::new(),
+		platform: driver.manifest.platform(),
 	})
 }
 
@@ -126,6 +127,7 @@ pub fn database_of(
 		memory_mb: kind.memory_mb(app).or(memory_mb),
 		user: kind.user(),
 		scratch: kind.scratch().iter().map(|path| (*path).to_owned()).collect(),
+		platform: driver.manifest.platform(),
 	})
 }
 

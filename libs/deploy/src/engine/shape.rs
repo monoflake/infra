@@ -2,12 +2,13 @@
 //! into a container. See spec/architecture/host.md, "What a deployment may ask for is host's
 //! decision".
 
-use super::{DEFAULT_MEMORY_MB, Engine, Error, Manifest, VERSION_LABEL, Version, network_of};
+use super::{
+	DEFAULT_MEMORY_MB, Engine, Error, Manifest, VERSION_LABEL, Version, create_options, network_of,
+};
 use bollard::models::{
 	ContainerCreateBody, EndpointIpamConfig, EndpointSettings, HostConfig, HostConfigLogConfig,
 	Mount, MountType, PortBinding, RestartPolicy, RestartPolicyNameEnum,
 };
-use bollard::query_parameters::CreateContainerOptionsBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -378,17 +379,22 @@ impl Engine {
 			}),
 			..Default::default()
 		};
+		let platform = manifest.platform();
 		match shape {
-			Shape::Steward { .. } => self.create_steward(container, body).await?,
-			_ => self.create(container, body).await?,
+			Shape::Steward { .. } => self.create_steward(container, platform.as_deref(), body).await?,
+			_ => self.create(container, platform.as_deref(), body).await?,
 		}
 		self.docker.start_container(container, None).await?;
 		Ok(())
 	}
 
-	async fn create(&self, name: &str, body: ContainerCreateBody) -> Result<(), Error> {
-		let options = CreateContainerOptionsBuilder::new().name(name).build();
-		self.docker.create_container(Some(options), body).await?;
+	async fn create(
+		&self,
+		name: &str,
+		platform: Option<&str>,
+		body: ContainerCreateBody,
+	) -> Result<(), Error> {
+		self.docker.create_container(Some(create_options(name, platform)), body).await?;
 		Ok(())
 	}
 
@@ -396,12 +402,17 @@ impl Engine {
 	/// refusing a bind whose source is missing before it creates anything; with neither, refuse.
 	/// See platform's spec/architecture/packages.md, "`apk` reaches the machine through a named
 	/// pipe".
-	async fn create_steward(&self, name: &str, body: ContainerCreateBody) -> Result<(), Error> {
+	async fn create_steward(
+		&self,
+		name: &str,
+		platform: Option<&str>,
+		body: ContainerCreateBody,
+	) -> Result<(), Error> {
 		for door in steward_doors() {
 			let mut body = body.clone();
 			let config = body.host_config.get_or_insert_with(HostConfig::default);
 			config.mounts.get_or_insert_with(Vec::new).push(door);
-			match self.create(name, body).await {
+			match self.create(name, platform, body).await {
 				Err(Error::Docker(error)) if missing_source(&error) => continue,
 				done => return done,
 			}

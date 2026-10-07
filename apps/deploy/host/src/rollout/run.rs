@@ -1,6 +1,7 @@
 //! Taking a CI run: deploy what it built for this node, Caddy first. See spec/architecture/host.md,
 //! "keeper has its own intake" and "Caddy is deployed like any app, and is the one door".
 
+use super::admit::runnable;
 use super::version::{archived, skip, staged};
 use crate::Host;
 use crate::store::{self, Action, Source, Stage};
@@ -23,16 +24,17 @@ pub async fn from_run(
 		eprintln!("host: run {run}: this node has no GITHUB_ACTIONS_TOKEN");
 		return false;
 	};
-	let (commit, artifacts) = match github.artifacts(repository, run).await {
-		Ok(built) => (built.commit, built.artifacts),
+	let built = match github.artifacts(repository, run).await {
+		Ok(built) => built,
 		Err(error) => {
 			eprintln!("host: run {run}: {error}");
 			return false;
 		}
 	};
+	let commit = built.commit.clone();
 	let artifacts: Vec<_> = match only {
-		Some(app) => artifacts.into_iter().filter(|artifact| artifact.app == app).collect(),
-		None => artifacts,
+		Some(app) => built.artifacts.iter().filter(|artifact| artifact.app == app).cloned().collect(),
+		None => built.artifacts.clone(),
 	};
 	if let Some(app) = only.filter(|_| artifacts.is_empty()) {
 		eprintln!("host: run {run}: it built nothing for `{app}`");
@@ -98,7 +100,34 @@ pub async fn from_run(
 			eprintln!("host: run {run}: {} is held stopped, so it was not deployed", artifact.app);
 			continue;
 		}
-		match archived(&host, id, &artifact.app, manifest, &fetched.image).await {
+		// Asked for in another architecture: that image instead, where this node can run it. See
+		// spec/architecture/host.md, "An app may ask for one architecture".
+		let image = match manifest.arch.as_deref().filter(|arch| *arch != artifact.arch) {
+			None => fetched.image,
+			Some(arch) => {
+				let _ = tokio::fs::remove_file(&fetched.image).await;
+				let admitting = async { runnable(&host, &manifest) };
+				if let Err(error) = staged(&host.store, id, Stage::Admitting, admitting).await {
+					eprintln!("host: run {run}: {}: {error}", artifact.app);
+					continue;
+				}
+				let fetching = async {
+					let Some(asked) = built.built_for(&artifact.app, arch) else {
+						return Err(format!("the run built no {arch} image of `{}`", artifact.app));
+					};
+					github.fetch(asked, &host.config.incoming).await.map_err(|error| error.to_string())
+				};
+				match staged(&host.store, id, Stage::Downloading, fetching).await {
+					Ok(fetched) => fetched.image,
+					Err(error) => {
+						eprintln!("host: run {run}: {}: {error}", artifact.app);
+						whole = false;
+						continue;
+					}
+				}
+			}
+		};
+		match archived(&host, id, &artifact.app, manifest, &image).await {
 			Ok(outcome) => eprintln!("host: run {run}: {} is {}", outcome.name, outcome.image),
 			Err(error) => {
 				eprintln!("host: run {run}: {}: {error}", artifact.app);

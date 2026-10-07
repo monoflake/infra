@@ -191,10 +191,10 @@ PRIVATE_SCOPES = "ledger"
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
 # Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs and PRIVATE_SCOPES on stdin, a line each. Values travel by stdin and environment only, never
-# argv. A file is replaced only when its content differs, and what it holds besides the keys named
-# is kept, GRANTS's other pairs too. Prints `secret <state>` and `host <state>`, a state being
-# current, changed or absent.
+# needs, PRIVATE_SCOPES and what it emulates on stdin, a line each. Values travel by stdin and
+# environment only, never argv. A file is replaced only when its content differs, and what it holds
+# besides the keys named is kept, GRANTS's other pairs too. Prints `secret <state>` and
+# `host <state>`, a state being current, changed or absent.
 RELAY = r"""set -eu
 umask 077
 read -r secret
@@ -203,6 +203,7 @@ read -r peers
 read -r slot
 read -r wanted
 read -r scopes
+read -r emulate
 upsert() {
 	file=$1
 	shift
@@ -240,7 +241,7 @@ if [ -f "$file" ]; then
 		esac
 	done
 	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants" "NODE_SLOT=$slot" \
-		"PRIVATE_SCOPES=$scopes")"
+		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate")"
 else
 	echo "host absent"
 fi
@@ -368,6 +369,56 @@ def apk_door():
 	return "\n".join(lines) + "\n"
 
 
+# The architectures a node may emulate, and the family whose packages set it up: arm64 alone, on
+# Debian alone. Alpine packages QEMU's user mode too, but nothing here has proved its registration
+# fixed at load, and no Alpine node is x86 to need it. See spec/architecture/nodes.md, "An x86 node
+# may run arm64 images, emulated, and never the other way".
+EMULATES = ("arm64",)
+EMULATING = "debian"
+
+# Runs on a node that emulates arm64: on x86 alone, QEMU's user mode installed unless it is, and its
+# registration with binfmt_misc checked enabled and fixed, the F flag, so a container needs no
+# emulator of its own. host reads EMULATE, given beside GRANTS, to run arm64 images there.
+EMULATION = r"""machine=$(uname -m)
+[ "$machine" = x86_64 ] || { echo "emulate is for an x86 node, and this one is $machine" >&2; exit 1; }
+if ! dpkg-query -W -f='${Status}' qemu-user-binfmt 2>/dev/null | grep -q ' installed$'; then
+	DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=600 qemu-user-binfmt >/dev/null
+fi
+entry=/proc/sys/fs/binfmt_misc/qemu-aarch64
+[ -f "$entry" ] || systemctl restart systemd-binfmt
+if ! grep -qx enabled "$entry" || ! sed -n 's/^flags: //p' "$entry" | grep -q F; then
+	echo "qemu-aarch64 is not registered enabled and fixed (F) in binfmt_misc" >&2
+	exit 1
+fi
+"""
+
+
+def emulated(node):
+	"""What host's EMULATE names on `node`: the architectures it emulates, space-separated."""
+	return " ".join(node.get("emulate", ()))
+
+
+def emulation_refused(name, node):
+	"""Why `node`'s `emulate` cannot be, or None when it can."""
+	emulate = node.get("emulate")
+	if emulate is None:
+		return None
+	if not isinstance(emulate, list) or not emulate or any(arch not in EMULATES for arch in emulate):
+		return f"{name}: emulate is a list of {', '.join(EMULATES)} alone, not {emulate!r}"
+	if node.get("system") != EMULATING:
+		return f"{name}: emulate is set up on {EMULATING} alone, and {name} is {node.get('system')}"
+	return None
+
+
+def load_nodes():
+	"""nodes.toml, every node's `emulate` checked before anything is asked of a machine."""
+	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	refused = [why for name, node in nodes.items() if (why := emulation_refused(name, node))]
+	if refused:
+		sys.exit("node: " + "\nnode: ".join(refused))
+	return nodes
+
+
 def grants(node):
 	"""The pairs host's `GRANTS` names on `node`: its family's, and the core's on a core node."""
 	return " ".join(GRANTS[node["system"]] + (CORE_GRANTS if node.get("core") else ()))
@@ -406,6 +457,8 @@ def script(name, node, proxies):
 		lines.append(apk_door())
 	# Every node with IPv4 is a proxy; one without asks them. See spec/architecture/nodes.md.
 	lines.append(proxy(family) if node.get("ipv4", True) else egress(proxies))
+	if emulated(node):
+		lines.append(EMULATION)
 	# The old name is replaced where /etc/hosts gives it, so the machine still resolves itself.
 	lines.append(
 		"""awk -v o="$old" -v n="$name" '$1 !~ /^#/ { for (i = 2; i <= NF; i++) if ($i == o) $i = n } { print }' """
@@ -499,6 +552,7 @@ def relay(where, name, nodes, peers, secrets_, dry):
 	given it."""
 	slot = list(nodes).index(name)
 	wanted = grants(nodes[name])
+	emulate = emulated(nodes[name])
 	if dry:
 		print(
 			f"node: {name}: would, on root@{where}:\n"
@@ -506,13 +560,13 @@ def relay(where, name, nodes, peers, secrets_, dry):
 			"  write /data/apps/relay/secret.env, mode 600, if it differs: RELAY_SECRET=<redacted>\n"
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
-			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES}\n"
+			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}'\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept"
 		)
 		return True
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
-		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n"
+		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -536,6 +590,7 @@ def environment(name, nodes, token, read_token):
 		"HOST_TOKEN": token,
 		"HOST_READ_TOKEN": read_token,
 		"GRANTS": grants(nodes[name]),
+		"EMULATE": emulated(nodes[name]),
 		"PRIVATE_SCOPES": PRIVATE_SCOPES,
 		"PRIVATE_SUFFIX": PRIVATE_SUFFIX,
 		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
@@ -570,7 +625,7 @@ def start_host(name, run, dry):
 	print(f"node: host on {name}, {arch}, from run {run} of {REPOSITORY}")
 	token = host_token(name, dry)
 	shared = {key: stored_secret(key, dry) for key in RELAY_SECRETS}
-	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	nodes = load_nodes()
 	peers = relay_peers(nodes)
 	notice = json.dumps({"run": run, "repository": REPOSITORY, "host_replaced": True})
 	if dry:
@@ -586,7 +641,8 @@ def start_host(name, run, dry):
 			f"    PUBLIC_SUFFIX={PUBLIC_SUFFIX} PRIVATE_SOURCES={PRIVATE_SOURCES}\n"
 			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
 			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN,\n"
-			f"    GRANTS='{grants(nodes[name])}', ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
+			f"    GRANTS='{grants(nodes[name])}', EMULATE='{emulated(nodes[name])}',\n"
+			"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
 		)
@@ -649,21 +705,21 @@ def start_host(name, run, dry):
 def main():
 	arguments = sys.argv[1:]
 	if arguments[:1] and arguments[0] in host_api.VERBS:
-		nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+		nodes = load_nodes()
 		host_api.main(arguments[0], arguments[1:], nodes)
 		return
 	if arguments[:1] == ["host"]:
 		rest = arguments[1:]
 		run = rest[rest.index("--run") + 1] if "--run" in rest else None
 		names = [a for a in rest if not a.startswith("-") and a != run]
-		nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+		nodes = load_nodes()
 		if len(names) != 1 or names[0] not in nodes or (run is not None and not run.isdigit()):
 			sys.exit(f"node: host takes one of {', '.join(nodes)}, and --run a run's number")
 		start_host(names[0], int(run) if run else None, "--dry-run" in rest or "-n" in rest)
 		return
 	dry = "--dry-run" in arguments or "-n" in arguments
 	address = arguments[arguments.index("--address") + 1] if "--address" in arguments else None
-	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	nodes = load_nodes()
 	names = [a for a in arguments if not a.startswith("-") and a != address]
 	if "--all" in arguments:
 		names = list(nodes)
