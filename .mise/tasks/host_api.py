@@ -265,7 +265,12 @@ def plan(verb, arguments):
 		fail(f"deploy takes --run and a run's number\n{USAGE}")
 	# Both receivers the hook tells, so a run that built host reaches keeper as well. See
 	# spec/architecture/host.md, "A run that built host is keeper's first, and host's only after".
-	notice = {"run": int(run), "repository": option(arguments, "--repository") or REPOSITORY}
+	# By hand, so a run that built host, keeper or Caddy is not held for the canary.
+	notice = {
+		"run": int(run),
+		"repository": option(arguments, "--repository") or REPOSITORY,
+		"by_hand": True,
+	}
 	only = option(arguments, "--app")
 	if only is None:
 		return [(HOST, "POST", "/notice", notice), (KEEPER, "POST", "/notice", notice)], None

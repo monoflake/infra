@@ -102,6 +102,8 @@ pub enum Stage {
 	Switching,
 	/// Beside: the version before finishing what it answers, then removed.
 	Draining,
+	/// Held until the canary has taken the run: a new host, keeper or Caddy reaches one node first.
+	Waiting,
 }
 
 /// What started an event: a CI run, an upload, or the panel.
@@ -113,6 +115,9 @@ pub struct Source {
 	pub run: Option<u64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub commit: Option<String>,
+	/// The repository the run is numbered in, as `owner/name`; absent from a row from before.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub repository: Option<String>,
 }
 
 impl Source {
@@ -125,7 +130,12 @@ impl Source {
 	}
 
 	pub fn run(run: u64, commit: Option<String>) -> Self {
-		Self { kind: "run".into(), run: Some(run), commit }
+		Self { kind: "run".into(), run: Some(run), commit, repository: None }
+	}
+
+	/// The same, saying which repository's run it is.
+	pub fn of(self, repository: &str) -> Self {
+		Self { repository: Some(repository.to_owned()), ..self }
 	}
 }
 

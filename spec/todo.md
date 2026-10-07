@@ -31,14 +31,3 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   cannot run -- [architecture/nodes.md](architecture/nodes.md), "An x86 node may run arm64 images,
   emulated, and never the other way", and [architecture/host.md](architecture/host.md), "An app may
   ask for one architecture". `buf` first, for the platform's Postgres.
-- **A new host, keeper or Caddy reaches one node first.** It goes to the canary, nrt, marked
-  `canary = true` in `nodes.toml` and the only node so marked, before the rest take it -- the door
-  that broke on all seven nodes at once on 2026-10-07 would have stopped at one. The rest learn by
-  asking: a run that built one of the three is held on every other node, whose host and keeper
-  poll the canary's verdict over the tailnet, through the canary's Caddy with the read token, and
-  deploy once it passes or skip, saying why, when it fails or a deadline passes. The verdict passes
-  when the canary has deployed the run and reports healthy; the others' reaching it through the
-  canary's Caddy proves that Caddy routes to host. `mise run node deploy` by hand overrides the
-  hold. Networks between a node's own apps are already put right on every start: keeper joins
-  host's network as it starts, and host attaches itself and Caddy to every network as it starts
-  and after each new Caddy.

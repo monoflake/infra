@@ -28,6 +28,7 @@ pub fn router(host: Arc<Host>) -> Router {
 		.route("/apps/{name}/history", get(history))
 		.route("/apps/{name}/health", get(app_health))
 		.route("/events", get(events))
+		.route("/runs/{owner}/{name}/{run}", get(run_verdict))
 		.route("/apps/{name}/redeploy", post(redeploy))
 		.route("/apps/{name}/rollback", post(rollback))
 		.route("/apps/{name}/start", post(start))
@@ -97,6 +98,22 @@ struct Notice {
 	/// this way and no other. See rollout/run.rs.
 	#[serde(default)]
 	app: Option<String>,
+	/// Sent by `mise run node deploy`: deployed now, without waiting for the canary, and a notice
+	/// of the same run still waiting gives up. See deploy::canary.
+	#[serde(default)]
+	by_hand: bool,
+	/// What keeper did with the host the run built, said when it passes the run on: the canary's
+	/// record of host for its verdict.
+	#[serde(default)]
+	host: Option<Replaced>,
+}
+
+/// What keeper did with a run's host.
+#[derive(Deserialize)]
+struct Replaced {
+	outcome: crate::store::Outcome,
+	#[serde(default)]
+	detail: Option<String>,
 }
 
 /// A CI run has finished. Open, since it can only ask host to look: the run is checked against
@@ -115,7 +132,7 @@ async fn notice(State(host): State<Arc<Host>>, Json(notice): Json<Notice>) -> Re
 	{
 		return failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_name", error);
 	}
-	let key = (repository.clone(), notice.run, notice.app.clone());
+	let key = (repository.clone(), notice.run, notice.app.clone(), notice.by_hand);
 	let fresh =
 		host.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone());
 	let answer =
@@ -123,15 +140,34 @@ async fn notice(State(host): State<Arc<Host>>, Json(notice): Json<Notice>) -> Re
 	if !fresh {
 		return response::success(StatusCode::OK, answer);
 	}
+	if notice.by_hand {
+		let mut released = host.released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		released.insert((repository.clone(), notice.run));
+	}
+	if let Some(replaced) = notice.host.as_ref().filter(|_| notice.host_replaced) {
+		record_host(&host.store, &repository, notice.run, replaced);
+	}
 	let taker = host.clone();
 	tokio::spawn(async move {
 		let (run, replaced, only) = (notice.run, notice.host_replaced, notice.app.as_deref());
-		if !rollout::from_run(taker.clone(), &repository, run, replaced, only).await {
+		if !rollout::from_run(taker.clone(), &repository, run, replaced, only, notice.by_hand).await {
 			let mut notices = taker.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 			notices.remove(&key);
 		}
 	});
 	response::success(StatusCode::ACCEPTED, answer)
+}
+
+/// Record keeper's replacement of host by `run`, as host's own history holds any app's deploy.
+fn record_host(store: &Store, repository: &str, run: u64, replaced: &Replaced) {
+	let source = Source::run(run, None).of(repository);
+	let starting = Some(crate::store::Stage::Starting);
+	let opened = store.record("host", Action::Deploy, &source, None, replaced.outcome, starting);
+	let recorded =
+		opened.and_then(|id| store.finish(id, replaced.outcome, None, replaced.detail.as_deref()));
+	if let Err(error) = recorded {
+		eprintln!("host: recording run {run}'s host: {error}");
+	}
 }
 
 /// Compared in time independent of where the first difference is.
@@ -268,6 +304,32 @@ async fn app(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Respons
 		Ok(None) => response::failure(StatusCode::NOT_FOUND, "no_such_app"),
 		Err(error) => failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error),
 	}
+}
+
+#[derive(Deserialize)]
+struct Built {
+	/// The gated apps the run built, comma-separated.
+	#[serde(default)]
+	built: String,
+}
+
+/// The canary's verdict on a run, which every other node asks before it takes a new host, keeper
+/// or Caddy. Answered on the canary alone. See canary.rs and deploy::canary.
+async fn run_verdict(
+	State(host): State<Arc<Host>>,
+	Path((owner, name, run)): Path<(String, String, u64)>,
+	Query(asked): Query<Built>,
+) -> Response {
+	if host.config.canary != deploy::canary::Canary::Itself {
+		return failed(StatusCode::NOT_FOUND, "no_such_route", "This node is not the canary");
+	}
+	let built: Vec<&str> = asked.built.split(',').filter(|app| !app.is_empty()).collect();
+	if built.is_empty() || !built.iter().all(|app| deploy::canary::GATED.contains(app)) {
+		let why = "`built` names one or more of host, keeper and caddy";
+		return failed(StatusCode::BAD_REQUEST, "invalid_name", why);
+	}
+	let repository = format!("{owner}/{name}");
+	stored(crate::canary::verdict(&host, &repository, run, &built).await)
 }
 
 /// How long an app has to answer when its health is asked from the console.
@@ -1014,6 +1076,72 @@ mod tests {
 			(&"probe".into(), &true.into(), &200.into())
 		);
 		assert_eq!(data["body"]["status"], "success");
+	}
+
+	#[test]
+	fn what_keeper_did_with_a_runs_host_is_in_hosts_history() {
+		use crate::store::{Outcome, Stage, Store};
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let reported: super::Replaced =
+			serde_json::from_str(r#"{"outcome":"skipped","detail":"the canary failed the run"}"#)
+				.unwrap();
+		super::record_host(&store, "monoflake/infra", 42, &reported);
+		let [event] = store.events(Some("host"), None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Skipped, Some(Stage::Starting)));
+		assert_eq!(event.detail.as_deref(), Some("the canary failed the run"));
+		assert_eq!(event.source.repository.as_deref(), Some("monoflake/infra"));
+		assert!(event.finished_at.is_some());
+	}
+
+	#[tokio::test]
+	async fn the_canary_alone_answers_a_runs_verdict_once_deployed_and_healthy() {
+		use crate::store::{Action, Deployed, Outcome, Source, Stage};
+		use deploy::canary::Canary;
+		let path = "/api/runs/monoflake/infra/42?built=caddy";
+		let directory = tempfile::tempdir().unwrap();
+		let elsewhere = crate::testing(directory.path());
+		let (status, envelope) = read(elsewhere, path).await;
+		assert_eq!((status, &envelope["code"]), (404, &"no_such_route".into()));
+
+		let directory = tempfile::tempdir().unwrap();
+		let canary = crate::testing_with(directory.path(), |config| config.canary = Canary::Itself);
+		let (status, envelope) = read(canary.clone(), "/api/runs/monoflake/infra/42?built=geo").await;
+		assert_eq!((status, &envelope["code"]), (400, &"invalid_name".into()));
+		let state =
+			|envelope: &serde_json::Value| envelope["data"]["state"].as_str().unwrap().to_owned();
+		let (status, envelope) = read(canary.clone(), path).await;
+		assert_eq!((status, state(&envelope).as_str()), (200, "pending"));
+
+		// Deployed by the run, and answering its health on its socket, as Caddy's is asked.
+		let source = Source::run(42, None).of("monoflake/infra");
+		let starting = Some(Stage::Starting);
+		let id =
+			canary.store.record("caddy", Action::Deploy, &source, None, Outcome::Running, starting);
+		canary.store.finish(id.unwrap(), Outcome::Succeeded, None, None).unwrap();
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"caddy\"\nplacements = [\"rdu\"]\n[container]\n\
+			 socket = \"admin.sock\"\nhealth = \"/config/\"\n[data]\npath = \"/data\"\n",
+		)
+		.unwrap();
+		let deployed = Deployed {
+			manifest,
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		canary.store.put_app(&deployed).unwrap();
+		let (_, envelope) = read(canary.clone(), path).await;
+		assert_eq!(state(&envelope), "pending");
+		assert!(envelope["data"]["why"].as_str().unwrap().contains("does not answer its health"));
+		let data = canary.volumes.data("caddy");
+		std::fs::create_dir_all(&data).unwrap();
+		let socket = tokio::net::UnixListener::bind(data.join("admin.sock")).unwrap();
+		let admin = axum::Router::new().route("/config/", axum::routing::get(|| async { "{}" }));
+		tokio::spawn(async move { axum::serve(socket, admin).await });
+		let (_, envelope) = read(canary, path).await;
+		assert_eq!(envelope["data"], serde_json::json!({ "state": "passed" }));
 	}
 
 	#[test]

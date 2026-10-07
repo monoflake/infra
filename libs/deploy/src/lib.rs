@@ -5,6 +5,7 @@
 
 pub mod beside;
 pub mod btrfs;
+pub mod canary;
 pub mod egress;
 pub mod engine;
 pub mod github;

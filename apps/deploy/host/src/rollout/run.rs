@@ -5,9 +5,10 @@ use super::admit::runnable;
 use super::version::{archived, skip, staged};
 use crate::Host;
 use crate::store::{self, Action, Source, Stage};
+use deploy::canary::{self, Canary, DEADLINE, GATED, waits};
 use deploy::manifest::{Manifest, Rollout};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 /// Deploy what a CI run built for this node, once GitHub's record of the run says it may be; with
 /// `only`, the operator's one app, rolled out by hand or not. host's own image is keeper's first,
@@ -20,6 +21,7 @@ pub async fn from_run(
 	run: u64,
 	host_replaced: bool,
 	only: Option<&str>,
+	by_hand: bool,
 ) -> bool {
 	let Some(github) = host.github.as_ref() else {
 		eprintln!("host: run {run}: this node has no GITHUB_ACTIONS_TOKEN");
@@ -46,6 +48,20 @@ pub async fn from_run(
 		// Not taken, so the notice keeper sends afterwards is.
 		return false;
 	}
+	// A new host, keeper or Caddy reaches the canary first; deployed by hand, it goes now.
+	let mut waiting = HashMap::new();
+	let built_apps = || built.artifacts.iter().map(|artifact| artifact.app.as_str());
+	if let Canary::At(canary) = host.config.canary
+		&& !by_hand
+		&& deploy::canary::gated(built_apps())
+	{
+		let gated: Vec<&str> = built_apps().filter(|app| GATED.contains(app)).collect();
+		let held = Held { host: &host, repository, run, commit: commit.clone() };
+		match held.wait(canary, &artifacts, &gated).await {
+			Some(ids) => waiting = ids,
+			None => return true,
+		}
+	}
 	// Read apart when the run uploaded them, so nothing placed elsewhere, held or rolled out by hand
 	// is downloaded at all; a run from before reads each from its image.
 	let declared = match &built.declarations {
@@ -63,10 +79,14 @@ pub async fn from_run(
 	let artifacts = caddy_first(artifacts, |artifact| artifact.app.as_str());
 	for artifact in artifacts.iter().filter(|artifact| artifact.app != "host") {
 		let app = artifact.app.as_str();
-		let source = Source::run(run, commit.clone());
+		let source = Source::run(run, commit.clone()).of(repository);
 		let first = if declared.contains_key(app) { Stage::Admitting } else { Stage::Downloading };
 		let running = store::Outcome::Running;
-		let id = match host.store.record(app, Action::Deploy, &source, None, running, Some(first)) {
+		let opened = match waiting.remove(app) {
+			Some(id) => host.store.advance(id, first, None).map(|()| id),
+			None => host.store.record(app, Action::Deploy, &source, None, running, Some(first)),
+		};
+		let id = match opened {
 			Ok(id) => id,
 			Err(error) => {
 				eprintln!("host: run {run}: {app}: {error}");
@@ -154,6 +174,67 @@ pub async fn from_run(
 		}
 	}
 	whole
+}
+
+/// A run held for the canary on this node.
+struct Held<'a> {
+	host: &'a Arc<Host>,
+	repository: &'a str,
+	run: u64,
+	commit: Option<String>,
+}
+
+impl Held<'_> {
+	/// Open a waiting event for each app `artifacts` brings but host, ask the canary at `canary`
+	/// about the `gated` apps until it answers, and give back the events to deploy into once it
+	/// passes. Otherwise each is closed as passed over, saying why, and there is nothing to deploy.
+	async fn wait(
+		&self,
+		canary: std::net::Ipv4Addr,
+		artifacts: &[deploy::github::Artifact],
+		gated: &[&str],
+	) -> Option<HashMap<String, i64>> {
+		let (host, repository, run) = (self.host, self.repository, self.run);
+		let source = Source::run(run, self.commit.clone()).of(repository);
+		let (running, waiting) = (store::Outcome::Running, Some(Stage::Waiting));
+		let mut ids = HashMap::new();
+		for app in artifacts.iter().map(|artifact| artifact.app.as_str()).filter(|app| *app != "host") {
+			match host.store.record(app, Action::Deploy, &source, None, running, waiting) {
+				Ok(id) => {
+					ids.insert(app.to_owned(), id);
+				}
+				Err(error) => eprintln!("host: run {run}: {app}: {error}"),
+			}
+		}
+		eprintln!("host: run {run}: it built {}, so it waits for the canary", gated.join(", "));
+		let config = &host.config;
+		let token = config.read_token.as_deref().unwrap_or_default();
+		let suffix = &config.caddy.private_suffix;
+		let ask = || deploy::canary::ask(canary, suffix, token, repository, run, gated);
+		let key = (repository.to_owned(), run);
+		let released = || host.released.lock().unwrap_or_else(PoisonError::into_inner).contains(&key);
+		let held = deploy::canary::hold(ask, released, DEADLINE, waits(), tokio::time::sleep).await;
+		let why = match held {
+			canary::Held::Passed => {
+				eprintln!("host: run {run}: the canary passed it");
+				return Some(ids);
+			}
+			canary::Held::Failed(why) => format!("the canary failed the run: {why}"),
+			canary::Held::Expired(last) => format!(
+				"the canary gave no verdict within {} hours; the last answer: {last}",
+				DEADLINE.as_secs() / 3600
+			),
+			canary::Held::Released => {
+				host.released.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+				"deployed by hand instead".to_owned()
+			}
+		};
+		eprintln!("host: run {run}: not deployed: {why}");
+		for id in ids.into_values() {
+			skip(host, id, &why);
+		}
+		None
+	}
 }
 
 /// Why a run's deploy of `manifest`'s app is passed over on this node, before its image is

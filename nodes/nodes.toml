@@ -1,13 +1,13 @@
 # Every node, and what a person decides about it; the axes are spec/architecture/nodes.md.
-# `domain` is the failure domain as a provider's code from the platform's registry -- `oci`, `az`,
-# `rkn`, and `int` for the hardware in the house -- with `-2` for a second account at one provider;
+# `domain` is the failure domain as a provider's code, `-2` for a second account at one provider:
 # platform's spec/architecture/gateway.md, "Providers are short codes, registered here".
 # `system` is the family the node's setup is written for. `lan` names an interface whose network is
 # trusted like the tailnet, for the one node in the house. `ipv4 = false` marks a node with no IPv4
 # to rely on, which reaches GitHub through the others' egress proxies. `core` marks the three nodes
-# that hold the control plane. `emulate = ["arm64"]` on an x86 Debian node runs arm64 images there
-# by emulation. A node is appended, never inserted: its position is its slot in a weekly spread,
-# platform's spec/architecture/cron.md.
+# that hold the control plane, `canary = true` the one a new host, keeper or Caddy reaches first.
+# `emulate = ["arm64"]` on an x86 Debian node runs arm64 images there by emulation. A node is
+# appended, never inserted: its position is its slot in a weekly spread, platform's
+# spec/architecture/cron.md.
 
 [tyo]
 core = true
@@ -17,6 +17,7 @@ expiry = 2036
 system = "debian"
 
 [nrt]
+canary = true
 tier = "datacenter"
 domain = "oci"
 expiry = 2036

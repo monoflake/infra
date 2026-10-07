@@ -58,6 +58,26 @@ pub async fn get_within(
 	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
 }
 
+/// GET `path` from `address` as the name `host`, with `token` as the bearer: one node asking
+/// another's Caddy over the tailnet.
+pub async fn get_as(
+	address: &str,
+	host: &str,
+	path: &str,
+	token: &str,
+	within: Duration,
+) -> Result<(u16, String), Error> {
+	let attempt = async {
+		let stream = tokio::net::TcpStream::connect(address).await.map_err(Error::Connect)?;
+		let request = Request::get(path)
+			.header("host", host)
+			.header("authorization", format!("Bearer {token}"))
+			.body(Full::new(Bytes::new()))?;
+		send(stream, request).await
+	};
+	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
+}
+
 /// The status an app with no network answers `path` with on its socket.
 pub async fn status_unix(socket: &Path, path: &str) -> Result<u16, Error> {
 	Ok(get_unix(socket, path).await?.0)

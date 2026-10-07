@@ -192,10 +192,10 @@ PRIVATE_SCOPES = "ledger"
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
 # Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs, PRIVATE_SCOPES and what it emulates on stdin, a line each. Values travel by stdin and
-# environment only, never argv. A file is replaced only when its content differs, and what it holds
-# besides the keys named is kept, GRANTS's other pairs too. Prints `secret <state>` and
-# `host <state>`, a state being current, changed or absent.
+# needs, PRIVATE_SCOPES, what it emulates and where its canary is on stdin, a line each. Values
+# travel by stdin and environment only, never argv. A file is replaced only when its content
+# differs, and what it holds besides the keys named is kept, GRANTS's other pairs too. Prints
+# `secret <state>` and `host <state>`, a state being current, changed or absent.
 RELAY = r"""set -eu
 umask 077
 read -r secret
@@ -205,6 +205,7 @@ read -r slot
 read -r wanted
 read -r scopes
 read -r emulate
+read -r canary
 upsert() {
 	file=$1
 	shift
@@ -242,7 +243,7 @@ if [ -f "$file" ]; then
 		esac
 	done
 	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants" "NODE_SLOT=$slot" \
-		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate")"
+		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary")"
 else
 	echo "host absent"
 fi
@@ -424,12 +425,32 @@ def domain_refused(name, node):
 	return f"{name}: domain is a provider's code like oci, az or oci-2, not {domain!r}"
 
 
+def canaries_refused(nodes):
+	"""Why the nodes do not name exactly one canary, `canary = true`, or nothing when they do."""
+	marked = [name for name, node in nodes.items() if "canary" in node]
+	canaries = [name for name in marked if nodes[name]["canary"] is True]
+	if len(marked) != len(canaries):
+		return [f"{', '.join(sorted(set(marked) - set(canaries)))}: canary is true or left out"]
+	if len(canaries) != 1:
+		return [f"exactly one node is the canary, canary = true, and {len(canaries)} are"]
+	return []
+
+
+def canary_of(name, nodes):
+	"""What host's and keeper's CANARY say on `name`: `self` on the canary, and on every other node
+	the canary's tailnet IPv4, which they ask its verdict at before taking a new host, keeper or
+	Caddy. See spec/todo.md."""
+	canary = next(other for other, node in nodes.items() if node.get("canary") is True)
+	return "self" if canary == name else tailnet_ipv4(canary)
+
+
 def load_nodes():
-	"""nodes.toml, every node's `domain` and `emulate` checked before anything is asked of a
-	machine."""
+	"""nodes.toml, every node's `domain` and `emulate`, and the one canary, checked before anything
+	is asked of a machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
 	checks = (domain_refused, emulation_refused)
 	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
+	refused += canaries_refused(nodes)
 	if refused:
 		sys.exit("node: " + "\nnode: ".join(refused))
 	return nodes
@@ -569,6 +590,7 @@ def relay(where, name, nodes, peers, secrets_, dry):
 	slot = list(nodes).index(name)
 	wanted = grants(nodes[name])
 	emulate = emulated(nodes[name])
+	canary = canary_of(name, nodes)
 	if dry:
 		print(
 			f"node: {name}: would, on root@{where}:\n"
@@ -576,13 +598,13 @@ def relay(where, name, nodes, peers, secrets_, dry):
 			"  write /data/apps/relay/secret.env, mode 600, if it differs: RELAY_SECRET=<redacted>\n"
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
-			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}'\n"
+			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept"
 		)
 		return True
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
-		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n"
+		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -607,6 +629,7 @@ def environment(name, nodes, token, read_token):
 		"HOST_READ_TOKEN": read_token,
 		"GRANTS": grants(nodes[name]),
 		"EMULATE": emulated(nodes[name]),
+		"CANARY": canary_of(name, nodes),
 		"PRIVATE_SCOPES": PRIVATE_SCOPES,
 		"PRIVATE_SUFFIX": PRIVATE_SUFFIX,
 		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
@@ -643,7 +666,8 @@ def start_host(name, run, dry):
 	shared = {key: stored_secret(key, dry) for key in RELAY_SECRETS}
 	nodes = load_nodes()
 	peers = relay_peers(nodes)
-	notice = json.dumps({"run": run, "repository": REPOSITORY, "host_replaced": True})
+	# By hand, so the canary is not waited for; see `canary_of`.
+	notice = json.dumps({"run": run, "repository": REPOSITORY, "host_replaced": True, "by_hand": True})
 	if dry:
 		print(
 			f"node: would, on root@{name}:\n"
@@ -658,6 +682,7 @@ def start_host(name, run, dry):
 			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
 			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN,\n"
 			f"    GRANTS='{grants(nodes[name])}', EMULATE='{emulated(nodes[name])}',\n"
+			f"    CANARY={canary_of(name, nodes)},\n"
 			"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"

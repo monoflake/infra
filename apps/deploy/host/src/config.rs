@@ -41,6 +41,8 @@ pub struct Config {
 	pub emulate: Vec<String>,
 	/// The architecture this node runs natively, as an artifact name spells it.
 	pub native: Option<&'static str>,
+	/// Where the canary is, from `CANARY`: this node, another at its tailnet address, or none.
+	pub canary: deploy::canary::Canary,
 }
 
 /// `EMULATE` read: architectures separated by whitespace, of those an app may ask for. Anything
@@ -108,6 +110,8 @@ pub struct CaddyConfig {
 	/// The private scopes, `public = false`, sent to the public gateway with `INTERNAL_TOKEN`; a
 	/// node knows its own declarations alone, so the rest are named here.
 	pub private_scopes: Vec<String>,
+	/// Whether this node is the canary, whose Caddy answers the others' asks on the tailnet.
+	pub canary: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -135,6 +139,9 @@ impl Config {
 		let apps_root = PathBuf::from(optional("APPS_ROOT", "/data/apps"));
 		let caddy_root = apps_root.join("caddy");
 		let own_container = optional("OWN_CONTAINER", "host");
+		let canary = deploy::canary::Canary::parse(&optional("CANARY", "")).map_err(|value| {
+			Missing::Unreadable("CANARY", format!("`{value}` is neither self nor an IPv4"))
+		})?;
 		let slot = optional("NODE_SLOT", "0")
 			.parse()
 			.map_err(|e: std::num::ParseIntError| Missing::Unreadable("NODE_SLOT", e.to_string()))?;
@@ -175,6 +182,7 @@ impl Config {
 					.split_whitespace()
 					.map(str::to_owned)
 					.collect(),
+				canary: canary == deploy::canary::Canary::Itself,
 			},
 			resolver: ResolverConfig {
 				file: apps_root.join("resolver").join("host").join("Corefile"),
@@ -187,6 +195,7 @@ impl Config {
 			grants: crate::grants::Grants::parse(&optional("GRANTS", ""))
 				.map_err(|pair| Missing::Unreadable("GRANTS", format!("`{pair}` is not app:role")))?,
 			native: deploy::github::node_arch(),
+			canary,
 			emulate: emulated(&optional("EMULATE", "")).map_err(|arch| {
 				Missing::Unreadable("EMULATE", format!("`{arch}` is not an architecture to emulate"))
 			})?,

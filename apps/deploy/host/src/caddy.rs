@@ -360,6 +360,32 @@ fn door(name: String, host: &str) -> Value {
 	})
 }
 
+/// The canary's verdicts, which every other node asks before it takes a new host, keeper or Caddy:
+/// `canary.<private suffix>` on port 80, from the tailnet alone, GET of a run's verdict and nothing
+/// else. host's read token is the check, carried through. Rendered on the canary alone. See
+/// deploy::canary.
+fn canary(config: &CaddyConfig) -> Value {
+	let name = format!("{}.{}", deploy::canary::LABEL, config.private_suffix);
+	json!({
+		"match": [{ "host": [name.clone()] }],
+		"handle": [{ "handler": "subroute", "routes": [
+			{
+				"match": [{
+					"remote_ip": { "ranges": [deploy::canary::TAILNET] },
+					"method": ["GET"],
+					"path_regexp": { "pattern": CANARY_READS }
+				}],
+				"handle": [encode(), proxy(&config.host, &name)]
+			},
+			{ "handle": [{ "handler": "static_response", "status_code": 404 }] }
+		]}],
+		"terminal": true
+	})
+}
+
+/// The one path the canary's route passes on: a run's verdict.
+const CANARY_READS: &str = "^/api/runs/[^/]+/[^/]+/[0-9]+$";
+
 /// Everything reached by a subdomain of its own on one side, by its label: each app with an
 /// interface, and each route. host has none of its own, and is reached by `door` alone. A stale
 /// app still holding the door's label is passed over, and said so.
@@ -484,15 +510,18 @@ pub fn render_switched(
 	if let Some((server, _)) = &private {
 		servers.insert("private".into(), server.clone());
 	}
+	let mut tunnel = Vec::from_iter(config.canary.then(|| canary(config)));
+	tunnel.push(private_api(config, apps, switched));
+	tunnel.push(json!({
+		"match": [{ "host": [format!("*.{public}")] }],
+		"handle": [{ "handler": "subroute", "routes": outside }],
+		"terminal": true
+	}));
 	servers.insert(
 		"tunnel".into(),
 		json!({
 			"listen": [":80"],
-			"routes": [private_api(config, apps, switched), {
-				"match": [{ "host": [format!("*.{public}")] }],
-				"handle": [{ "handler": "subroute", "routes": outside }],
-				"terminal": true
-			}],
+			"routes": tunnel,
 			"errors": { "routes": [refused()] },
 			"trusted_proxies": trusted,
 			"client_ip_headers": ["Cf-Connecting-Ip"]
@@ -556,6 +585,7 @@ mod tests {
 			public_api: "api.public.test".into(),
 			app_sources: vec!["172.16.0.0/12".into()],
 			private_scopes: vec!["ledger".into()],
+			canary: false,
 		}
 	}
 
@@ -610,6 +640,31 @@ mod tests {
 		assert_eq!(named.matches(r#""stream_close_delay":"30s""#).count(), 5);
 		// An app replaced in place renders as it always did.
 		assert!(!text(&render(&config(), &[geo()], &[], true)).contains("stream_close_delay"));
+	}
+
+	#[test]
+	fn only_the_canary_answers_a_runs_verdict_and_only_to_the_tailnet() {
+		let routes = |canary: bool| {
+			let config = CaddyConfig { canary, ..config() };
+			render(&config, &[geo()], &[], false)["apps"]["http"]["servers"]["tunnel"]["routes"].clone()
+		};
+		assert!(!text(&routes(false)).contains("canary.inside.test"));
+		let on_canary = routes(true);
+		let first = &on_canary[0];
+		assert_eq!(first["match"][0]["host"], json!(["canary.inside.test"]));
+		let passed = &first["handle"][0]["routes"][0];
+		assert_eq!(passed["match"][0]["remote_ip"]["ranges"], json!(["100.64.0.0/10"]));
+		assert_eq!(passed["match"][0]["method"], json!(["GET"]));
+		assert_eq!(text(passed).matches(r#""dial":"host.app-host:11011""#).count(), 1);
+		assert_eq!(first["handle"][0]["routes"][1]["handle"][0]["status_code"], 404);
+		let reads = regex::Regex::new(super::CANARY_READS).unwrap();
+		assert!(reads.is_match("/api/runs/monoflake/infra/42"));
+		for path in ["/api/apps", "/api/runs/monoflake/infra/x", "/api/runs/a/b/1/x", "/notice"] {
+			assert!(!reads.is_match(path), "{path}");
+		}
+		// What the rest of the server answers is the same as on any node.
+		let rest = Value::Array(on_canary.as_array().unwrap()[1..].to_vec());
+		assert_eq!(text(&rest), text(&routes(false)));
 	}
 
 	#[test]

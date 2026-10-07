@@ -354,6 +354,42 @@ a run alone, and keeper, once host is replaced -- or put back, if the new one fa
 run on to host marked as done with host. The rest of the run, keeper included, is then deployed by
 the host that run built.
 
+**A new host, keeper or Caddy reaches the canary first.** Those three are the door every notice
+comes through, and a door that breaks on all seven nodes at once -- as one did on 2026-10-07 --
+leaves nothing to deliver the fix. So one node, nrt, is the canary: `canary = true` in
+`nodes.toml`, on exactly one node, which `mise run node` checks and writes into host's `.env` as
+`CANARY` -- `self` on nrt, nrt's tailnet IPv4 on every other node. nrt is neither core nor short of
+IPv4, an ordinary cloud node like most; a Caddy change that breaks only rdu's LAN side passes it,
+and one broken node instead of seven is still the gain.
+
+- **The canary takes such a run as it comes.** Every other node holds it: keeper before replacing
+  host, and host for the whole run, each of its apps a row in stage `waiting`.
+- **The others ask nrt, over the tailnet.** `GET /api/runs/<owner>/<name>/<run>?built=<apps>`,
+  `built` naming which of the three the run built, with the read token, sent to nrt's tailnet
+  address on port 80 as `canary.<private suffix>`. Only the canary's Caddy renders that name, and
+  passes on that one path, a GET, from `100.64.0.0/10`; anything else asked of it is a 404, and no
+  other node's Caddy changes. Only the canary's host answers the route.
+- **The verdict is `passed`, `pending` or `failed`.** It is `failed` when nrt failed or passed over
+  one of the apps for that run, and `pending` while one is not yet taken, still deploying, or not
+  answering its health. It is `passed` once each is deployed by that run and keeper and Caddy
+  answer their health, host answering being host's own. keeper tells host how its replacement of
+  host went when it passes the run on, so host's history holds host's deploy as it holds any
+  app's, and the verdict reads it there. A row names the repository of its run, so another
+  repository's run of the same number is not it.
+- **The others ask again** after 30 s, 60, 120 and 240, then every five minutes, for two hours. An
+  ask that gets no answer counts as `pending`. On a pass the held rows move on to `admitting`. On a
+  failure, or at the deadline, they close as skipped, saying why, and keeper, not replacing host,
+  passes the run on saying so.
+- **`mise run node deploy` overrides the hold.** Its notice says it is sent by hand; it is taken
+  apart from the hook's notice of the same run, deployed at once, and a hold on that run gives up
+  at its next ask, its rows closed as "deployed by hand instead".
+
+Reaching nrt through its Caddy proves that Caddy routes to host. keeper's own door,
+`keeper.<suffix>` through the tunnel, is not proven by the verdict: only the hook's next notice to
+nrt's keeper proves it. A host that restarts while holding loses the hold, and its rows close as
+failed. The run that brings the canary in is taken by hosts and keepers from before it, so it
+reaches all seven at once.
+
 It is reached through Caddy like everything else, which was chosen over binding keeper's port to the
 machine's address directly. The cost is that a Caddy that is down makes keeper unreachable too;
 accepted, because Caddy starts from the file host last wrote and fails independently of host, so
@@ -576,7 +612,8 @@ and its commit, an upload, or an operator -- the image, when it started and ende
 why when it failed, with the logs of the failure. They are paged fifty at a time, the newest first, as far
 back as they go.
 
-**A deploy is one row that moves through its stages as it happens**: `downloading`, `admitting` --
+**A deploy is one row that moves through its stages as it happens**: `waiting` for the canary,
+when the run is held -- "A new host, keeper or Caddy reaches the canary first" -- then `downloading`, `admitting` --
 the declaration read, its placements and any hold weighed, `admit` passed -- `loading` and
 `starting`, which runs from stopping the old container to the new one passing its health check. A
 finished row keeps the stage it last reached, so a failure says where it happened. An artifact a run

@@ -5,6 +5,7 @@
 
 mod api;
 mod caddy;
+mod canary;
 mod config;
 mod cron;
 mod environment;
@@ -25,6 +26,10 @@ use std::sync::Arc;
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+/// A notice taken: its repository, its run, the one app the operator named, and whether it was
+/// sent by hand.
+pub type Taken = (String, u64, Option<String>, bool);
+
 /// Everything a request handler reaches.
 pub struct Host {
 	pub config: config::Config,
@@ -35,8 +40,10 @@ pub struct Host {
 	/// Absent without a GITHUB_ACTIONS_TOKEN and DEPLOY_SOURCES, and then CI's notices are refused.
 	pub github: Option<deploy::github::GitHub>,
 	/// The runs a notice has been taken for, each by its repository, and the one app named when the
-	/// operator named one.
-	pub notices: std::sync::Mutex<std::collections::HashSet<(String, u64, Option<String>)>>,
+	/// operator named one; and whether it was sent by hand, past the canary.
+	pub notices: std::sync::Mutex<std::collections::HashSet<Taken>>,
+	/// The runs deployed by hand past the canary, which a notice holding the same run gives up.
+	pub released: std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
 	/// The images as the background last found them, and what the panel asked of them.
 	pub images: images::Images,
 	/// When `cron` was last redeployed for its socket mounts, so a read-back that never settles
@@ -49,9 +56,18 @@ pub struct Host {
 /// configuration are there, and Docker is never asked.
 #[cfg(test)]
 pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
+	testing_with(root, |_| {})
+}
+
+/// `testing`, its configuration changed by `change` first.
+#[cfg(test)]
+pub(crate) fn testing_with(
+	root: &std::path::Path,
+	change: impl FnOnce(&mut config::Config),
+) -> Arc<Host> {
 	use std::path::PathBuf;
 	let apps_root = root.join("apps");
-	let config = config::Config {
+	let mut config = config::Config {
 		node: "rdu".into(),
 		slot: 0,
 		token: "full".into(),
@@ -78,6 +94,7 @@ pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
 			public_api: "api.public.test".into(),
 			app_sources: vec![],
 			private_scopes: vec![],
+			canary: false,
 		},
 		resolver: config::ResolverConfig {
 			file: PathBuf::from("/nowhere/Corefile"),
@@ -87,8 +104,10 @@ pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
 		grants: grants::Grants::default(),
 		emulate: vec![],
 		native: Some("amd64"),
+		canary: deploy::canary::Canary::None,
 		apps_root: apps_root.clone(),
 	};
+	change(&mut config);
 	Arc::new(Host {
 		store: store::Store::open(&config.state).unwrap(),
 		engine: deploy::Engine::connect().unwrap(),
@@ -100,6 +119,7 @@ pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
 		deploying: tokio::sync::Mutex::new(()),
 		github: None,
 		notices: std::sync::Mutex::default(),
+		released: std::sync::Mutex::default(),
 		images: images::Images::default(),
 		cron_mount_redeployed_at: std::sync::Mutex::new(None),
 		config,
@@ -123,6 +143,7 @@ async fn main() -> anyhow::Result<()> {
 		deploying: tokio::sync::Mutex::new(()),
 		github: deploy::github::GitHub::from_env(),
 		notices: std::sync::Mutex::default(),
+		released: std::sync::Mutex::default(),
 		images: images::Images::default(),
 		cron_mount_redeployed_at: std::sync::Mutex::new(None),
 		config,

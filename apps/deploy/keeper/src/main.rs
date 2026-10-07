@@ -10,11 +10,12 @@ use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use deploy::canary::{Canary, Held};
 use deploy::replace::{Error as Failed, replace};
 use deploy::{Engine, Manifest, Shape, Version, Volumes};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 /// musl's allocator is slow under many small allocations, and images are built for speed; see
 /// spec/architecture/host.md, "An image is built for speed, and for any node of its architecture".
@@ -46,8 +47,15 @@ struct Keeper {
 	replacing: tokio::sync::Mutex<()>,
 	/// Absent without a GITHUB_ACTIONS_TOKEN and DEPLOY_SOURCES, and then CI's notices are refused.
 	github: Option<deploy::github::GitHub>,
-	/// The runs a notice has been taken for.
-	notices: std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
+	/// The runs a notice has been taken for, and whether it was sent by hand, past the canary.
+	notices: std::sync::Mutex<std::collections::HashSet<(String, u64, bool)>>,
+	/// The runs deployed by hand past the canary, which a notice holding the same run gives up.
+	released: std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
+	/// Where the canary is, from `CANARY`: this node, another at its tailnet address, or none.
+	canary: Canary,
+	/// What the canary is asked with: the private suffix its Caddy answers under, and the read token.
+	private_suffix: String,
+	read_token: String,
 }
 
 fn setting(key: &str, default: &str) -> String {
@@ -72,6 +80,11 @@ async fn main() -> anyhow::Result<()> {
 		replacing: tokio::sync::Mutex::new(()),
 		github: deploy::github::GitHub::from_env(),
 		notices: std::sync::Mutex::default(),
+		released: std::sync::Mutex::default(),
+		canary: Canary::parse(&setting("CANARY", ""))
+			.map_err(|value| anyhow::anyhow!("CANARY `{value}` is neither self nor an IPv4"))?,
+		private_suffix: setting("PRIVATE_SUFFIX", ""),
+		read_token: setting("HOST_READ_TOKEN", ""),
 	});
 	deploy::clear_arrivals(&keeper.incoming)?;
 	// On host's own network every time it starts, as Caddy is: a keeper that host redeploys comes
@@ -216,6 +229,9 @@ struct Notice {
 	/// Whose run, as `owner/name`. A notice from before they named one means the one source.
 	#[serde(default)]
 	repository: Option<String>,
+	/// Sent by `mise run node deploy`: host is replaced now, without waiting for the canary.
+	#[serde(default)]
+	by_hand: bool,
 }
 
 /// A CI run has finished; if it built host, host is replaced. Open, since it can only ask keeper
@@ -229,23 +245,28 @@ async fn notice(State(keeper): State<Arc<Keeper>>, Json(notice): Json<Notice>) -
 	let Some(repository) = repository else {
 		return response::failure(StatusCode::BAD_REQUEST, "invalid_repository");
 	};
-	let key = (repository.clone(), notice.run);
+	let key = (repository.clone(), notice.run, notice.by_hand);
 	let notices = || keeper.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 	let answer = serde_json::json!({ "run": notice.run, "repository": repository });
 	if !notices().insert(key.clone()) {
 		return response::success(StatusCode::OK, answer);
 	}
+	if notice.by_hand {
+		let mut released = keeper.released.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+		released.insert((repository.clone(), notice.run));
+	}
 	let taker = keeper.clone();
 	tokio::spawn(async move {
-		if !from_run(&taker, &repository, notice.run).await {
+		if !from_run(&taker, &repository, notice.run, notice.by_hand).await {
 			taker.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&key);
 		}
 	});
 	response::success(StatusCode::ACCEPTED, answer)
 }
 
-/// The host a run built, if it built one, put in place. True when nothing failed.
-async fn from_run(keeper: &Keeper, repository: &str, run: u64) -> bool {
+/// The host a run built, if it built one, put in place -- on any node but the canary only once the
+/// canary passed the run, unless it is sent by hand. True when nothing failed.
+async fn from_run(keeper: &Keeper, repository: &str, run: u64, by_hand: bool) -> bool {
 	let Some(github) = keeper.github.as_ref() else { return false };
 	let artifacts = match github.artifacts(repository, run).await {
 		Ok(built) => built.artifacts,
@@ -257,6 +278,37 @@ async fn from_run(keeper: &Keeper, repository: &str, run: u64) -> bool {
 	let Some(artifact) = artifacts.iter().find(|artifact| artifact.app == "host") else {
 		return true;
 	};
+	if let Canary::At(canary) = keeper.canary
+		&& !by_hand
+	{
+		let gated: Vec<&str> = artifacts
+			.iter()
+			.map(|artifact| artifact.app.as_str())
+			.filter(|app| deploy::canary::GATED.contains(app))
+			.collect();
+		eprintln!("keeper: run {run}: it built host, so it waits for the canary");
+		let (suffix, token) = (&keeper.private_suffix, &keeper.read_token);
+		let ask = || deploy::canary::ask(canary, suffix, token, repository, run, &gated);
+		let key = (repository.to_owned(), run);
+		let released = || keeper.released.lock().unwrap_or_else(PoisonError::into_inner).contains(&key);
+		let (deadline, waits) = (deploy::canary::DEADLINE, deploy::canary::waits());
+		let why = match deploy::canary::hold(ask, released, deadline, waits, tokio::time::sleep).await {
+			Held::Passed => None,
+			Held::Failed(why) => Some(format!("the canary failed the run: {why}")),
+			Held::Expired(last) => Some(format!("the canary gave no verdict in time: {last}")),
+			// The notice sent by hand replaces host and passes the run on itself.
+			Held::Released => {
+				keeper.released.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+				eprintln!("keeper: run {run}: deployed by hand instead");
+				return true;
+			}
+		};
+		if let Some(why) = why {
+			eprintln!("keeper: run {run}: host not replaced: {why}");
+			pass_on(repository, run, ("skipped", Some(why))).await;
+			return true;
+		}
+	}
 	let fetched = match github.fetch(artifact, &keeper.incoming).await {
 		Ok(fetched) => fetched,
 		Err(error) => {
@@ -272,24 +324,26 @@ async fn from_run(keeper: &Keeper, repository: &str, run: u64) -> bool {
 			return true;
 		}
 	};
-	let replaced = match from_archive(keeper, manifest, &fetched.image).await {
+	let (replaced, outcome) = match from_archive(keeper, manifest, &fetched.image).await {
 		Ok(image) => {
 			eprintln!("keeper: run {run}: host is {image}");
-			true
+			(true, ("succeeded", None))
 		}
 		Err(Reply(_, _, message)) => {
 			eprintln!("keeper: run {run}: {message}");
-			false
+			(false, ("failed", Some(message)))
 		}
 	};
 	// Whether the new host stayed or the old one is back, the run's other images are host's now.
-	pass_on(repository, run).await;
+	pass_on(repository, run, outcome).await;
 	replaced
 }
 
-/// Hand `run` to host with host's part done, over the network the replacement joined keeper to.
-async fn pass_on(repository: &str, run: u64) {
-	let notice = serde_json::json!({ "run": run, "repository": repository, "host_replaced": true });
+/// Hand `run` to host with host's part done, over the network the replacement joined keeper to,
+/// saying how it went: host records it, and the canary's verdict reads it.
+async fn pass_on(repository: &str, run: u64, (outcome, detail): (&str, Option<String>)) {
+	let host = serde_json::json!({ "outcome": outcome, "detail": detail });
+	let notice = serde_json::json!({ "run": run, "repository": repository, "host_replaced": true, "host": host });
 	let body = notice.to_string().into_bytes();
 	match deploy::http::post(&host_address(), "/notice", body).await {
 		Ok(status) if (200..300).contains(&status) => {}
