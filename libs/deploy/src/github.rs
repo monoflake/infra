@@ -14,6 +14,7 @@ use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// The workflow that builds images; a run of any other builds nothing to deploy.
@@ -22,6 +23,12 @@ pub const WORKFLOW: &str = ".github/workflows/deploy.yml";
 const EVENTS: [&str; 3] = ["push", "schedule", "workflow_dispatch"];
 /// How an artifact carrying an app's image is named: `deploy-geo-arm64`.
 const PREFIX: &str = "deploy-";
+/// The one artifact holding every declaration the run built an image for, each `<app>.toml`.
+const DECLARATIONS: &str = "declarations";
+/// The most a declarations artifact may hold, and the most one declaration may weigh: a
+/// declaration is a page of TOML, and anything bigger is not what CI uploads.
+const MOST_DECLARATIONS: usize = 256;
+const LARGEST_DECLARATION: u64 = 64 * 1024;
 /// The architectures CI builds for, spelled as Docker's `TARGETARCH` spells them.
 const ARCHES: [&str; 2] = ["arm64", "amd64"];
 
@@ -59,13 +66,22 @@ pub struct Run {
 	pub head_sha: Option<String>,
 }
 
-/// What a run built: its commit, and the artifacts it left for this node's architecture and for
-/// the others.
+/// What a run built: its commit, the artifacts it left for this node's architecture and for the
+/// others, and its declarations apart when it uploaded them.
 #[derive(Debug)]
 pub struct Built {
 	pub commit: Option<String>,
 	pub artifacts: Vec<Artifact>,
 	pub others: Vec<Artifact>,
+	pub declarations: Option<Declarations>,
+}
+
+/// The run's declarations, uploaded apart from its images.
+#[derive(Debug, Clone)]
+pub struct Declarations {
+	repository: String,
+	id: u64,
+	digest: String,
 }
 
 impl Built {
@@ -248,10 +264,14 @@ impl GitHub {
 		check(run, &record, repository)?;
 		let path = format!("/actions/runs/{run}/artifacts?per_page=100");
 		let listed: Listed = self.json(repository, &path).await?;
-		let (artifacts, others) = listed
-			.artifacts
+		let fresh: Vec<Record> =
+			listed.artifacts.into_iter().filter(|record| !record.expired).collect();
+		let declarations = fresh.iter().find(|record| record.name == DECLARATIONS).and_then(|record| {
+			let digest = record.digest.clone()?;
+			Some(Declarations { repository: repository.to_owned(), id: record.id, digest })
+		});
+		let (artifacts, others) = fresh
 			.into_iter()
-			.filter(|record| !record.expired)
 			.filter_map(|record| {
 				let (app, arch) = app_of(&record.name)?;
 				Some(Artifact {
@@ -263,19 +283,51 @@ impl GitHub {
 				})
 			})
 			.partition(|artifact| Some(artifact.arch) == node_arch());
-		Ok(Built { commit: record.head_sha, artifacts, others })
+		Ok(Built { commit: record.head_sha, artifacts, others, declarations })
 	}
 
 	/// Download `artifact` into `directory`, hold it to its digest, and take out what CI put in it.
 	pub async fn fetch(&self, artifact: &Artifact, directory: &Path) -> Result<Fetched, Error> {
+		let at = (artifact.repository.as_str(), artifact.id, artifact.digest.as_str());
+		let zip = self.download(at, &artifact.app, directory).await?;
+		let image = crate::arrival(directory);
+		let (name, from, to) = (artifact.app.clone(), zip.clone(), image.clone());
+		let unpacked = tokio::task::spawn_blocking(move || unpack(&name, &from, &to))
+			.await
+			.map_err(|e| Error::Http(e.to_string()))?;
+		let _ = tokio::fs::remove_file(&zip).await;
+		Ok(Fetched { image, declaration: unpacked? })
+	}
+
+	/// Every declaration the run uploaded apart, by app: what a node reads before it downloads any
+	/// image. See spec/architecture/host.md, "The machine pulls; nothing pushes into it".
+	pub async fn declarations(
+		&self,
+		declared: &Declarations,
+		directory: &Path,
+	) -> Result<HashMap<String, String>, Error> {
+		let at = (declared.repository.as_str(), declared.id, declared.digest.as_str());
+		let zip = self.download(at, DECLARATIONS, directory).await?;
+		let from = zip.clone();
+		let read = tokio::task::spawn_blocking(move || read_declarations(&from))
+			.await
+			.map_err(|e| Error::Http(e.to_string()));
+		let _ = tokio::fs::remove_file(&zip).await;
+		read?
+	}
+
+	/// The artifact `id` of `repository`, downloaded into `directory` as a zip and held to `digest`;
+	/// `name` says which in an error.
+	async fn download(
+		&self,
+		(repository, id, digest): (&str, u64, &str),
+		name: &str,
+		directory: &Path,
+	) -> Result<PathBuf, Error> {
 		tokio::fs::create_dir_all(directory).await.map_err(io(directory.display().to_string()))?;
 		// GitHub answers with a redirect to storage, which is signed and must not be sent the token.
-		let uri = format!(
-			"{}/repos/{}/actions/artifacts/{}/zip",
-			canmi::EXTERNAL_GITHUB_API,
-			artifact.repository,
-			artifact.id
-		);
+		let uri =
+			format!("{}/repos/{repository}/actions/artifacts/{id}/zip", canmi::EXTERNAL_GITHUB_API);
 		let redirect = self.get(&uri, true).await?;
 		let status = redirect.status().as_u16();
 		let location = redirect
@@ -283,11 +335,11 @@ impl GitHub {
 			.get(hyper::header::LOCATION)
 			.and_then(|value| value.to_str().ok())
 			.map(str::to_owned)
-			.ok_or(Error::Status { status, what: format!("artifact {}", artifact.id) })?;
+			.ok_or(Error::Status { status, what: format!("artifact {id}") })?;
 		let mut response = self.get(&location, false).await?;
 		let status = response.status().as_u16();
 		if !(200..300).contains(&status) {
-			return Err(Error::Status { status, what: format!("artifact {} from storage", artifact.id) });
+			return Err(Error::Status { status, what: format!("artifact {id} from storage") });
 		}
 
 		// Named by a counter, like an upload, so nothing GitHub answered becomes part of a path.
@@ -303,20 +355,41 @@ impl GitHub {
 		}
 		file.finish().await.map_err(io(zip.display().to_string()))?;
 		// GitHub's digest is the SHA-256 of the zip as it is downloaded; measured on run 36368010996.
-		let digest = format!("sha256:{}", hex(&hasher.finalize()));
-		if !digest.eq_ignore_ascii_case(&artifact.digest) {
+		let sum = format!("sha256:{}", hex(&hasher.finalize()));
+		if !sum.eq_ignore_ascii_case(digest) {
 			let _ = tokio::fs::remove_file(&zip).await;
-			return Err(Error::Digest(artifact.app.clone()));
+			return Err(Error::Digest(name.to_owned()));
 		}
-
-		let image = crate::arrival(directory);
-		let (name, from, to) = (artifact.app.clone(), zip.clone(), image.clone());
-		let unpacked = tokio::task::spawn_blocking(move || unpack(&name, &from, &to))
-			.await
-			.map_err(|e| Error::Http(e.to_string()))?;
-		let _ = tokio::fs::remove_file(&zip).await;
-		Ok(Fetched { image, declaration: unpacked? })
+		Ok(zip)
 	}
+}
+
+/// Each `<app>.toml` in the declarations zip, by app. A name no app may have is not read, and an
+/// archive that is not what CI uploads is refused whole.
+fn read_declarations(zip: &Path) -> Result<HashMap<String, String>, Error> {
+	let shape = |why: String| Error::Shape { name: DECLARATIONS.to_owned(), why };
+	let file = std::fs::File::open(zip).map_err(io(zip.display().to_string()))?;
+	let mut archive = zip::ZipArchive::new(file).map_err(|e| shape(e.to_string()))?;
+	if archive.len() > MOST_DECLARATIONS {
+		return Err(shape(format!("{} entries, past {MOST_DECLARATIONS}", archive.len())));
+	}
+	let mut declared = HashMap::new();
+	for index in 0..archive.len() {
+		let entry = archive.by_index(index).map_err(|e| shape(e.to_string()))?;
+		let Some(app) = entry.name().strip_suffix(".toml").map(str::to_owned) else { continue };
+		if !(crate::manifest::check_name(&app).is_ok() || crate::manifest::OWN.contains(&app.as_str()))
+		{
+			continue;
+		}
+		if entry.size() > LARGEST_DECLARATION {
+			return Err(shape(format!("`{app}.toml` weighs {} bytes", entry.size())));
+		}
+		let mut text = String::new();
+		std::io::Read::read_to_string(&mut std::io::Read::take(entry, LARGEST_DECLARATION), &mut text)
+			.map_err(|e| shape(e.to_string()))?;
+		declared.insert(app, text);
+	}
+	Ok(declared)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -418,6 +491,7 @@ mod tests {
 			commit: None,
 			artifacts: vec![artifact("database", "amd64"), artifact("geo", "amd64")],
 			others: vec![artifact("database", "arm64")],
+			declarations: None,
 		};
 		let found =
 			|app, arch| built.built_for(app, arch).map(|artifact| (artifact.app.as_str(), artifact.arch));
@@ -425,6 +499,50 @@ mod tests {
 		assert_eq!(found("database", "amd64"), Some(("database", "amd64")));
 		assert_eq!(found("geo", "arm64"), None);
 		assert_eq!(found("cron", "arm64"), None);
+	}
+
+	/// A zip of `entries`, as upload-artifact makes one, in `directory`.
+	fn zipped(directory: &Path, entries: &[(&str, &[u8])]) -> PathBuf {
+		use std::io::Write;
+		let path = directory.join("declarations.zip");
+		let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+		for (name, bytes) in entries {
+			zip.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+			zip.write_all(bytes).unwrap();
+		}
+		zip.finish().unwrap();
+		path
+	}
+
+	#[test]
+	fn declarations_are_read_by_app_and_nothing_else_is() {
+		let directory = tempfile::tempdir().unwrap();
+		let zip = zipped(
+			directory.path(),
+			&[
+				("geo.toml", b"name = \"geo\""),
+				("caddy.toml", b"name = \"caddy\""),
+				("api.toml", b"reserved"),
+				("../escape.toml", b"outside"),
+				("readme.txt", b"not a declaration"),
+			],
+		);
+		let declared = read_declarations(&zip).unwrap();
+		let mut apps: Vec<&str> = declared.keys().map(String::as_str).collect();
+		apps.sort_unstable();
+		assert_eq!(apps, ["caddy", "geo"]);
+		assert_eq!(declared["geo"], "name = \"geo\"");
+	}
+
+	#[test]
+	fn declarations_past_what_ci_uploads_are_refused_whole() {
+		let directory = tempfile::tempdir().unwrap();
+		let heavy = vec![b'#'; usize::try_from(LARGEST_DECLARATION).unwrap() + 1];
+		let zip = zipped(directory.path(), &[("geo.toml", &heavy)]);
+		assert!(matches!(read_declarations(&zip), Err(Error::Shape { .. })));
+		let not_zip = directory.path().join("plain");
+		std::fs::write(&not_zip, b"not a zip").unwrap();
+		assert!(matches!(read_declarations(&not_zip), Err(Error::Shape { .. })));
 	}
 
 	#[test]

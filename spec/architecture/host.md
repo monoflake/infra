@@ -136,8 +136,16 @@ So the direction is reversed, and trust is moved off the channel.
 - host asks GitHub about that run with `GITHUB_ACTIONS_TOKEN`, a fine-grained token owned by the
   monoflake organization with Actions read on its sources, and **runs nothing unless the answer is
   one of its sources' `.github/workflows/deploy.yml`, on `main`, finished and successful** -- the
-  one path `libs/deploy`'s `WORKFLOW` accepts; then downloads the artifact built for its own
-  architecture, `deploy-<app>-<arch>` with `arm64` or `amd64`, and leaves the other; it checks the one it took against the digest GitHub recorded. The
+  one path `libs/deploy`'s `WORKFLOW` accepts. **It reads the declarations before any image**: the
+  run's `declare` job uploads every planned app's `service.toml` apart, as `<app>.toml` in one small
+  artifact named `declarations`, so host passes over an app placed elsewhere, rolled out by hand
+  and not named, or held stopped, without downloading it. Then it downloads one image per app it
+  takes, `deploy-<app>-<arch>` with `arm64` or `amd64`: its own architecture's, or the one the app
+  asks for. A run without `declarations`, from before it existed, is read the old way, each
+  declaration from its image. Every artifact is held to the digest GitHub recorded, the
+  declarations too, and a declarations zip that is not what CI uploads -- past 256 entries, a
+  declaration past 64 KiB, or not a zip -- fails the notice rather than falling back to downloading
+  every image. Each image still carries its own `service.toml`, which keeper reads. The
   notice is a hint, not an authority: a forged one can at worst redeploy what `main` already built.
 - **A node's sources are its own to name**, in `DEPLOY_SOURCES` in the node's `.env`, as
   `owner/name` pairs: a run is numbered within its repository, so a notice names the repository

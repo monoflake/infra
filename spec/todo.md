@@ -18,11 +18,6 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
 - **A health-check stage of its own**, which needs `libs/deploy`'s `replace_beside` to report its
   progress: today `starting` covers the start and the check together --
   [architecture/host.md](architecture/host.md), "Every event is kept, and none is pruned".
-- **A node reads where an app is placed before downloading it.** The declaration travels inside the
-  artifact, so every node downloads every image a run built and only then drops what is placed
-  elsewhere: a run of the platform's thirteen apps cost each small node minutes for the one it
-  runs. CI uploads the declarations apart, small, and host fetches only what is placed on it --
-  [architecture/host.md](architecture/host.md), "The machine pulls; nothing pushes into it".
 - **x86 nodes run arm64 images by emulation**: `emulate = ["arm64"]` in `nodes.toml`, which
   `mise run node` installs QEMU's user-mode emulation for, and `arch = "arm64"` in an app's
   `service.toml`, which host fetches that architecture's artifact for and refuses to place where it

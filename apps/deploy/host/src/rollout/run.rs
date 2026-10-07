@@ -6,6 +6,7 @@ use super::version::{archived, skip, staged};
 use crate::Host;
 use crate::store::{self, Action, Source, Stage};
 use deploy::manifest::{Manifest, Rollout};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Deploy what a CI run built for this node, once GitHub's record of the run says it may be; with
@@ -45,97 +46,137 @@ pub async fn from_run(
 		// Not taken, so the notice keeper sends afterwards is.
 		return false;
 	}
+	// Read apart when the run uploaded them, so nothing placed elsewhere, held or rolled out by hand
+	// is downloaded at all; a run from before reads each from its image.
+	let declared = match &built.declarations {
+		Some(declarations) => match github.declarations(declarations, &host.config.incoming).await {
+			Ok(declared) => declared,
+			Err(error) => {
+				eprintln!("host: run {run}: {error}");
+				return false;
+			}
+		},
+		None => HashMap::new(),
+	};
 	let mut whole = true;
 	// See spec/architecture/host.md, "Caddy is deployed like any app, and is the one door".
 	let artifacts = caddy_first(artifacts, |artifact| artifact.app.as_str());
 	for artifact in artifacts.iter().filter(|artifact| artifact.app != "host") {
+		let app = artifact.app.as_str();
 		let source = Source::run(run, commit.clone());
-		let (app, running, downloading) =
-			(artifact.app.as_str(), store::Outcome::Running, Some(Stage::Downloading));
-		let opened = host.store.record(app, Action::Deploy, &source, None, running, downloading);
-		let id = match opened {
+		let first = if declared.contains_key(app) { Stage::Admitting } else { Stage::Downloading };
+		let running = store::Outcome::Running;
+		let id = match host.store.record(app, Action::Deploy, &source, None, running, Some(first)) {
 			Ok(id) => id,
 			Err(error) => {
-				eprintln!("host: run {run}: {}: {error}", artifact.app);
+				eprintln!("host: run {run}: {app}: {error}");
 				whole = false;
 				continue;
 			}
 		};
-		let fetching = github.fetch(artifact, &host.config.incoming);
-		let fetched = match staged(&host.store, id, Stage::Downloading, fetching).await {
-			Ok(fetched) => fetched,
-			Err(error) => {
-				eprintln!("host: run {run}: {}: {error}", artifact.app);
-				whole = false;
-				continue;
+		// The declaration, and the image of this node's architecture when reading it meant fetching it.
+		let (manifest, carried) = match declared.get(app) {
+			Some(text) => {
+				let reading = async { Manifest::parse(text) };
+				match staged(&host.store, id, Stage::Admitting, reading).await {
+					Ok(manifest) => (manifest, None),
+					Err(error) => {
+						eprintln!("host: run {run}: {app}: {error}");
+						continue;
+					}
+				}
+			}
+			None => {
+				let fetching = github.fetch(artifact, &host.config.incoming);
+				let fetched = match staged(&host.store, id, Stage::Downloading, fetching).await {
+					Ok(fetched) => fetched,
+					Err(error) => {
+						eprintln!("host: run {run}: {app}: {error}");
+						whole = false;
+						continue;
+					}
+				};
+				let reading = async { Manifest::parse(&fetched.declaration) };
+				match staged(&host.store, id, Stage::Admitting, reading).await {
+					Ok(manifest) => (manifest, Some(fetched.image)),
+					Err(error) => {
+						eprintln!("host: run {run}: {app}: {error}");
+						let _ = tokio::fs::remove_file(&fetched.image).await;
+						continue;
+					}
+				}
 			}
 		};
-		let reading = async { Manifest::parse(&fetched.declaration) };
-		let manifest = match staged(&host.store, id, Stage::Admitting, reading).await {
-			Ok(manifest) => manifest,
-			Err(error) => {
-				eprintln!("host: run {run}: {}: {error}", artifact.app);
-				let _ = tokio::fs::remove_file(&fetched.image).await;
-				continue;
+		if let Some(why) = passed_over(&host, &manifest, only, repository, run) {
+			skip(&host, id, &why);
+			if let Some(image) = &carried {
+				let _ = tokio::fs::remove_file(image).await;
 			}
-		};
-		// Built for every node; deployed only where it is placed.
-		if !manifest.placements.iter().any(|placement| placement == &host.config.node) {
-			skip(&host, id, &unplaced(&manifest.placements));
-			let _ = tokio::fs::remove_file(&fetched.image).await;
+			eprintln!("host: run {run}: {app} was not deployed: {why}");
 			continue;
 		}
-		// Rolled out by hand: the operator's notice for it alone deploys it, a node at a time.
-		if manifest.rollout == Rollout::Manual && only.is_none() {
-			skip(&host, id, &by_hand(&host.config.node, repository, run, &artifact.app));
-			let _ = tokio::fs::remove_file(&fetched.image).await;
-			eprintln!("host: run {run}: {} is rolled out by hand, so it was not deployed", artifact.app);
-			continue;
-		}
-		// Held stopped from the panel: the run is recorded, not started. See
-		// spec/architecture/host.md, "A stop holds until a start".
-		if host.store.app(&artifact.app).ok().flatten().is_some_and(|app| app.held) {
-			skip(&host, id, HELD);
-			let _ = tokio::fs::remove_file(&fetched.image).await;
-			eprintln!("host: run {run}: {} is held stopped, so it was not deployed", artifact.app);
-			continue;
-		}
-		// Asked for in another architecture: that image instead, where this node can run it. See
+		// Asked for in another architecture: that image alone, where this node can run it. See
 		// spec/architecture/host.md, "An app may ask for one architecture".
-		let image = match manifest.arch.as_deref().filter(|arch| *arch != artifact.arch) {
-			None => fetched.image,
-			Some(arch) => {
-				let _ = tokio::fs::remove_file(&fetched.image).await;
+		let wanted = manifest.arch.as_deref().unwrap_or(artifact.arch);
+		let image = match carried {
+			Some(image) if wanted == artifact.arch => image,
+			carried => {
+				if let Some(image) = carried {
+					let _ = tokio::fs::remove_file(&image).await;
+				}
 				let admitting = async { runnable(&host, &manifest) };
 				if let Err(error) = staged(&host.store, id, Stage::Admitting, admitting).await {
-					eprintln!("host: run {run}: {}: {error}", artifact.app);
+					eprintln!("host: run {run}: {app}: {error}");
 					continue;
 				}
 				let fetching = async {
-					let Some(asked) = built.built_for(&artifact.app, arch) else {
-						return Err(format!("the run built no {arch} image of `{}`", artifact.app));
+					let Some(asked) = built.built_for(app, wanted) else {
+						return Err(format!("the run built no {wanted} image of `{app}`"));
 					};
 					github.fetch(asked, &host.config.incoming).await.map_err(|error| error.to_string())
 				};
 				match staged(&host.store, id, Stage::Downloading, fetching).await {
 					Ok(fetched) => fetched.image,
 					Err(error) => {
-						eprintln!("host: run {run}: {}: {error}", artifact.app);
+						eprintln!("host: run {run}: {app}: {error}");
 						whole = false;
 						continue;
 					}
 				}
 			}
 		};
-		match archived(&host, id, &artifact.app, manifest, &image).await {
+		match archived(&host, id, app, manifest, &image).await {
 			Ok(outcome) => eprintln!("host: run {run}: {} is {}", outcome.name, outcome.image),
 			Err(error) => {
-				eprintln!("host: run {run}: {}: {error}", artifact.app);
+				eprintln!("host: run {run}: {app}: {error}");
 				whole = false;
 			}
 		}
 	}
 	whole
+}
+
+/// Why a run's deploy of `manifest`'s app is passed over on this node, before its image is
+/// downloaded: placed elsewhere, rolled out by hand and not named by the operator, or held stopped
+/// from the panel -- spec/architecture/host.md, "A stop holds until a start".
+fn passed_over(
+	host: &Host,
+	manifest: &Manifest,
+	only: Option<&str>,
+	repository: &str,
+	run: u64,
+) -> Option<String> {
+	let app = manifest.name.as_str();
+	if !manifest.placements.iter().any(|placement| placement == &host.config.node) {
+		return Some(unplaced(&manifest.placements));
+	}
+	if manifest.rollout == Rollout::Manual && only.is_none() {
+		return Some(by_hand(&host.config.node, repository, run, app));
+	}
+	if host.store.app(app).ok().flatten().is_some_and(|app| app.held) {
+		return Some(HELD.to_owned());
+	}
+	None
 }
 
 /// Why a run's deploy was passed over for an app held stopped.
@@ -174,6 +215,42 @@ mod tests {
 			"rolled out by hand: mise run node deploy rdu --run 42 --repository monoflake/platform \
 			 --app database"
 		);
+	}
+
+	#[test]
+	fn an_app_is_passed_over_before_its_image_is_downloaded_where_it_is_not_deployed() {
+		use super::passed_over;
+		use crate::store::Deployed;
+		let directory = tempfile::tempdir().unwrap();
+		// The testing host is the node `rdu`.
+		let host = crate::testing(directory.path());
+		let declared = |placements: &str, rollout: &str| {
+			deploy::Manifest::parse(&format!(
+				"version = 1\nname = \"geo\"\nplacements = [{placements}]\nrollout = \"{rollout}\"\n\
+				 [container]\nport = 23440\nhealth = \"/health\"\n"
+			))
+			.unwrap()
+		};
+		let passed = |manifest, only| passed_over(&host, manifest, only, "monoflake/platform", 42);
+		let here = declared("\"rdu\"", "replace");
+		assert_eq!(passed(&here, None), None);
+		let elsewhere = declared("\"tyo\", \"buf\"", "replace");
+		assert_eq!(passed(&elsewhere, None).as_deref(), Some("placed on tyo, buf, not on this node"));
+		let by_hand = declared("\"rdu\"", "manual");
+		assert!(passed(&by_hand, None).is_some_and(|why| why.starts_with("rolled out by hand")));
+		assert_eq!(passed(&by_hand, Some("geo")), None);
+		host
+			.store
+			.put_app(&Deployed {
+				manifest: here.clone(),
+				image: "sha256:a".into(),
+				previous: None,
+				deployed_at: String::new(),
+				held: false,
+			})
+			.unwrap();
+		host.store.hold("geo", true).unwrap();
+		assert_eq!(passed(&here, None).as_deref(), Some(super::HELD));
 	}
 
 	#[test]
