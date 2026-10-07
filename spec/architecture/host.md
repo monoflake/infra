@@ -203,6 +203,16 @@ the build is slower, and it runs on the Mac, where nobody is waiting on a reques
 is set, so an image is not tied to the chip of the node it was first built for. The profile is its
 own rather than `release`, which a local release build would otherwise inherit and pay for.
 
+**Every Rust image compiles through sccache, so a crate built for one image is a hit for the next.**
+A CI runner's builder starts empty, so a cache mount alone kept nothing between jobs and every image
+compiled its dependencies again. The backend is whatever the environment starting the build names:
+GitHub Actions' cache in CI, its credentials handed to the build as a secret by
+[`.mise/tasks/image`](../../.mise/tasks/image) and never written to a layer, and a cache mount on a
+machine with none named. It moves to a bucket of the platform's own once there is one -- platform's
+`spec/architecture/scheduling.md` -- by naming it in the workflow, with no Dockerfile changed. A
+cache that cannot be reached leaves rustc compiling alone; it never fails a build. The binary is the
+same either way.
+
 **A Rust program's image is the binary on `scratch` and nothing else.** Each is linked statically against
 musl, so it needs no C library from the image, and the image holds the binary and, for geo, its
 data. musl's own allocator is slow under many small allocations, so every program sets mimalloc as
