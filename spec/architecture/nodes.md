@@ -60,6 +60,27 @@ node somebody else brought is never core.
 Decided on 2026-10-07, in place of a rule that placed the platform on whichever node was
 `datacenter`, large and long-held, which named `tyo` alone.
 
+## An x86 node may run arm64 images, emulated, and never the other way
+
+**A node declares `emulate = ["arm64"]` in `nodes.toml` to run arm64 images it cannot run natively.**
+`mise run node` installs QEMU's user-mode emulation and registers it with the kernel's
+`binfmt_misc`, fixed at registration so a container needs nothing of its own, and host runs an app
+that asks for arm64 there by emulation -- [host.md](host.md), "An app may ask for one architecture".
+It is for an app whose files must be the same bytes on every node, which an arm64 program
+emulated writes exactly as a native one does, its C library included: the platform's Postgres,
+streaming physically between `tyo`, `rdu` and `buf` -- platform's `spec/architecture/databases.md`.
+
+**Only x86 emulates arm64.** x86 orders memory more strictly than arm64, so an arm64 program on it
+gets every guarantee it was built to expect and more. An x86 program emulated on arm64 would rely on
+an ordering the host does not give and the emulator must add around every access -- slow at best,
+and at worst wrong in shared memory, which is where Postgres's processes meet. Rejected for that.
+
+**It is slow, and measured so.** On `buf` on 2026-10-07, an emulated standby replayed a 150 MB load
+and 200 writes a second as closely as `rdu` natively did, while a query ran twenty to thirty times
+slower than on `tyo`: 1,455 read-only transactions a second against `tyo`'s 30,519, a count of a
+million rows in 3.9 s against 0.12. So an emulated node is a standby that replays well and a primary
+of last resort.
+
 ## Nothing comes in but over the tailnet
 
 **A node opens no inbound port to the public.** Public traffic reaches it through its own tunnel,

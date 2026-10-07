@@ -257,6 +257,15 @@ ioctls themselves rather than running `btrfs`, which is what let them leave Debi
 `btrfs` in an empty image, and no command line to inject into once there is no command. The
 target follows the platform being built, so the same Dockerfile serves an x86 node.
 
+### An app may ask for one architecture
+
+**`arch = "arm64"` in `service.toml` runs the app's arm64 image on every node it is placed on**, natively
+on an arm64 node and emulated on an x86 one that declares `emulate = ["arm64"]` -- [nodes.md](nodes.md),
+"An x86 node may run arm64 images, emulated, and never the other way". Without it a node runs the
+image of its own architecture, as before. host fetches the run's artifact of the asked architecture,
+and refuses, before anything is stopped, to place an app on a node that can run that architecture
+neither natively nor by emulation. Only `arm64` may be asked.
+
 ### The declaration is `service.toml`, beside the Dockerfile
 
 An app states what it needs in `apps/<name>/service.toml` and ships it with its image. host is a

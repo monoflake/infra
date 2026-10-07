@@ -23,10 +23,12 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   elsewhere: a run of the platform's thirteen apps cost each small node minutes for the one it
   runs. CI uploads the declarations apart, small, and host fetches only what is placed on it --
   [architecture/host.md](architecture/host.md), "The machine pulls; nothing pushes into it".
-- **An app chooses how it is rolled out**: `rollout = "replace" | "beside" | "manual"` in
-  `service.toml`, `replace` the default -- [architecture/host.md](architecture/host.md), "An app
-  chooses how it is rolled out, and keeping nothing earns a gapless one". `manual` first, which the
-  platform's Postgres waits on; `beside` with it, for geo and every app that keeps nothing.
+- **x86 nodes run arm64 images by emulation**: `emulate = ["arm64"]` in `nodes.toml`, which
+  `mise run node` installs QEMU's user-mode emulation for, and `arch = "arm64"` in an app's
+  `service.toml`, which host fetches that architecture's artifact for and refuses to place where it
+  cannot run -- [architecture/nodes.md](architecture/nodes.md), "An x86 node may run arm64 images,
+  emulated, and never the other way", and [architecture/host.md](architecture/host.md), "An app may
+  ask for one architecture". `buf` first, for the platform's Postgres.
 - **A new host, keeper or Caddy reaches one node first.** It goes to a canary node, which must
   answer a notice through Caddy's door and keeper's before the rest take it -- the door that broke
   on all seven nodes at once on 2026-10-07 would have stopped at one. And whatever must be true
