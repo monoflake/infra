@@ -2,6 +2,7 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "caddy"
+display_name = "Reverse Proxy"
 placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 # Its ports are its shape's, not a declaration's: the edge publishes 80 and 443. host checks its

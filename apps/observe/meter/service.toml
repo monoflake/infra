@@ -2,6 +2,7 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "meter"
+display_name = "Metrics"
 placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 # No port and no network: host reads it on its socket. See spec/architecture/meter.md.

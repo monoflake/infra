@@ -3,6 +3,7 @@
 # answers nothing of its own".
 version = 1
 name = "resolver"
+display_name = "DNS Resolver"
 placements = ["rdu"]
 
 [container]

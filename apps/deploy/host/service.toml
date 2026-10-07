@@ -2,6 +2,7 @@
 # own names are rendered by host itself; see spec/architecture/host.md.
 version = 1
 name = "host"
+display_name = "Host"
 placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 [container]

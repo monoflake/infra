@@ -2,6 +2,7 @@
 # spec/architecture/host.md, "host never updates itself; keeper updates host".
 version = 1
 name = "keeper"
+display_name = "Keeper"
 placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
 
 [container]
