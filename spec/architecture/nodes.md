@@ -65,12 +65,20 @@ Decided on 2026-10-07, in place of a rule that placed the platform on whichever 
 **A node declares `emulate = ["arm64"]` in `nodes.toml` to run arm64 images it cannot run natively.**
 `mise run node` installs QEMU's user-mode emulation and registers it with the kernel's
 `binfmt_misc`, fixed at registration so a container needs nothing of its own -- Debian's
-`qemu-user-binfmt` registers it so; an Alpine node may not declare it, none being x86 and its
-registration unproven -- and host is told `EMULATE=arm64` in its `.env` and runs an app that asks
+`qemu-user-binfmt` registers it so; an Alpine node may not declare it, its registration unproven
+and nothing placed on `nrt` or `hnd`, the two x86 Alpine nodes, needing it -- and host is told `EMULATE=arm64` in its `.env` and runs an app that asks
 for arm64 there by emulation -- [host.md](host.md), "An app may ask for one architecture".
 It is for an app whose files must be the same bytes on every node, which an arm64 program
 emulated writes exactly as a native one does, its C library included: the platform's Postgres,
 streaming physically between `tyo`, `rdu` and `buf` -- platform's `spec/architecture/databases.md`.
+
+**The emulated core is QEMU's default, every extension it knows, not one pinned to ARMv8.0.**
+`QEMU_CPU=cortex-a72` would make an emulated node a second check of the floor every arm64 image is
+held to -- [host.md](host.md), "An image is built for speed, and for any node of its architecture"
+-- but `rdu` is that floor natively, and the one app emulated, the database, runs there too; and
+without LSE atomics the emulated Postgres would be slower still. The floor is checked where it
+covers every image before any node runs it, when an image first needs checking: in CI, by running
+each arm64 binary under `qemu-aarch64 -cpu cortex-a72`. Decided on 2026-10-07.
 
 **Only x86 emulates arm64.** x86 orders memory more strictly than arm64, so an arm64 program on it
 gets every guarantee it was built to expect and more. An x86 program emulated on arm64 would rely on
@@ -153,6 +161,23 @@ machine. The token GitHub's Actions are read with is shared, since it can only r
 ## The nodes
 
 What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml), and nowhere else.
+
+**What the machines were seen to be on 2026-10-07**, a snapshot to choose placements by and nothing
+more -- what the meter reports is the record, and a machine that changes leaves this stale:
+
+| Node  | Account  | CPU                                    | vCPUs | Instruction set                                      | Memory  |
+| ----- | -------- | -------------------------------------- | ----- | ---------------------------------------------------- | ------- |
+| `tyo` | OCI      | Arm Neoverse N1                        | 4     | ARMv8.2: LSE atomics, dot product, CRC32, AES, SHA-2 | 23 GiB  |
+| `nrt` | OCI      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `hnd` | OCI      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `gvx` | Azure    | Arm Neoverse N1                        | 2     | ARMv8.2, as `tyo`                                    | 970 MiB |
+| `bru` | Azure    | AMD EPYC 7763, Zen 3                   | 2     | x86-64-v3, AES-NI, SHA-NI                            | 898 MiB |
+| `buf` | RackNerd | Intel Xeon E5-2690 v4, Broadwell       | 2     | x86-64-v3, AES-NI, no SHA-NI; emulates arm64         | 3.3 GiB |
+| `rdu` | home     | Arm Cortex-A72 and A53, big and little | 8     | ARMv8.0: CRC32, AES, SHA-2, no LSE atomics           | 7.7 GiB |
+
+`nrt` and `hnd` show two vCPUs that are one core's two threads, as `bru`'s are; `tyo`, `gvx` and
+`buf` give a core each. On one core, measured the same day, `tyo` ran a loop in 1.87 s, `buf` in
+2.07 s and `rdu` in 6.39 s, scheduled onto an A53.
 
 **`gvx` and `bru` have no public IPv4**, inbound or, from late 2026, outbound -- `ipv4 = false` in
 `nodes.toml`. On such a node only one thing needs IPv4: host and keeper asking GitHub for a run and
