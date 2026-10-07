@@ -23,7 +23,7 @@ of `NODE` in host's `.env`.
 | Axis               | Answers                                      | Values                               |
 | ------------------ | -------------------------------------------- | ------------------------------------ |
 | **tier**           | whether it stays up                          | `datacenter`, `home` or `transient`  |
-| **failure domain** | which nodes fail together                    | the account it is held under         |
+| **failure domain** | which nodes fail together                    | the account's provider, by its code  |
 | **expiry**         | until when it is expected to be held, a year | an estimate, recorded without reason |
 
 - **`datacenter`** is a provider's machine, held for years. **`home`** is a machine in the house: it
@@ -32,7 +32,11 @@ of `NODE` in host's `.env`.
   computation.
 - **A failure domain is an account.** What ends an account -- a card, a plan, a provider's decision --
   takes every machine under it at once, so two machines in one account are one domain however far
-  apart they are. Two accounts at one provider are two domains.
+  apart they are. Two accounts at one provider are two domains. **A domain is written as the
+  provider's code** from the registry in platform's `spec/architecture/gateway.md`, "Providers are
+  short codes, registered here" -- `oci`, `az`, `rkn`, and `int` for the hardware in the house -- and
+  shown to a person by the provider's name; a second account at a provider is the code and a
+  number, `oci-2`.
 - **Capacity is measured, never declared**: the architecture, memory and disk are what `meter`
   reports ([meter.md](meter.md)). A machine given more memory changes no record, and a declared size
   would be wrong from that day.
@@ -165,15 +169,15 @@ What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml)
 **What the machines were seen to be on 2026-10-07**, a snapshot to choose placements by and nothing
 more -- what the meter reports is the record, and a machine that changes leaves this stale:
 
-| Node  | Account  | CPU                                    | vCPUs | Instruction set                                      | Memory  |
-| ----- | -------- | -------------------------------------- | ----- | ---------------------------------------------------- | ------- |
-| `tyo` | Oracle   | Arm Neoverse N1                        | 4     | ARMv8.2: LSE atomics, dot product, CRC32, AES, SHA-2 | 23 GiB  |
-| `nrt` | Oracle   | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
-| `hnd` | Oracle   | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
-| `gvx` | Azure    | Arm Neoverse N1                        | 2     | ARMv8.2, as `tyo`                                    | 970 MiB |
-| `bru` | Azure    | AMD EPYC 7763, Zen 3                   | 2     | x86-64-v3, AES-NI, SHA-NI                            | 898 MiB |
-| `buf` | RackNerd | Intel Xeon E5-2690 v4, Broadwell       | 2     | x86-64-v3, AES-NI, no SHA-NI; emulates arm64         | 3.3 GiB |
-| `rdu` | home     | Arm Cortex-A72 and A53, big and little | 8     | ARMv8.0: CRC32, AES, SHA-2, no LSE atomics           | 7.7 GiB |
+| Node  | Account     | CPU                                    | vCPUs | Instruction set                                      | Memory  |
+| ----- | ----------- | -------------------------------------- | ----- | ---------------------------------------------------- | ------- |
+| `tyo` | Oracle      | Arm Neoverse N1                        | 4     | ARMv8.2: LSE atomics, dot product, CRC32, AES, SHA-2 | 23 GiB  |
+| `nrt` | Oracle      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `hnd` | Oracle      | AMD EPYC 7551, Zen                     | 2     | x86-64-v3, AES-NI, SHA-NI                            | 966 MiB |
+| `gvx` | Azure       | Arm Neoverse N1                        | 2     | ARMv8.2, as `tyo`                                    | 970 MiB |
+| `bru` | Azure       | AMD EPYC 7763, Zen 3                   | 2     | x86-64-v3, AES-NI, SHA-NI                            | 898 MiB |
+| `buf` | RackNerd    | Intel Xeon E5-2690 v4, Broadwell       | 2     | x86-64-v3, AES-NI, no SHA-NI; emulates arm64         | 3.3 GiB |
+| `rdu` | Self-hosted | Arm Cortex-A72 and A53, big and little | 8     | ARMv8.0: CRC32, AES, SHA-2, no LSE atomics           | 7.7 GiB |
 
 `nrt` and `hnd` show two vCPUs that are one core's two threads, as `bru`'s are; `tyo`, `gvx` and
 `buf` give a core each. On one core, measured the same day, `tyo` ran a loop in 1.87 s, `buf` in
