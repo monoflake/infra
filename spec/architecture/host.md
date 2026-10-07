@@ -76,13 +76,16 @@ going -- the platform's state moves into its database and its buckets, and frien
 - **`replace`**, the default: everything above. The app stops, its directory is snapshotted and the
   new version starts on it, a few seconds down, and a failed check puts both back. Every app with
   state on its node stays here.
-- **`beside`**, for an app that keeps nothing on its node -- no `[data]`, or one it may lose. The new
-  version starts beside the running one under a name of its own and is checked; Caddy's route moves
-  to it, reloaded without dropping a connection; the old one is given a grace period to finish what
-  it is answering, a socket that stays open included, and is stopped. Going back is moving the route
-  back while the old one is still there. Both run at once for a moment, so a node without room for
-  the two falls back to `replace` and says so. Not for an app that publishes a port or answers on a
-  socket, which two containers cannot hold at once.
+- **`beside`**, for an app that keeps nothing on its node: no `[data]`, no sidecar, no socket, no
+  role. The new version starts beside the running one as `<app>_next`, a name no app may take, and is
+  checked and routed by its address on the app's network, which stays its own when it is renamed to
+  `<app>` after; Caddy's route moves to it, reloaded without dropping a connection, an open socket
+  kept thirty seconds; the old one is given thirty seconds after `SIGTERM` to finish what it is
+  answering, and is removed. A failed start or check removes the new one and leaves the old one
+  routed, so nothing is snapshotted and going back costs nothing. Both run at once for a moment, so
+  a node whose `MemAvailable` is short of the app's ceiling and 256 MiB more falls back to `replace`,
+  and the event says why. The event's stages after `starting` are `checking`, `switching` and
+  `draining`.
 - **`manual`**: a run's notice deploys nothing of it, and the operator deploys it a node at a time,
   as the platform's Postgres needs -- standbys first, the primary last; platform's
   `spec/architecture/databases.md`, "Upgrades are pinned, reported, and rolled by hand".
@@ -517,7 +520,8 @@ so nothing that faces a browser runs beside it.
   port out of reach.
 - **Caddy keeps one door to it, `infra.<suffix>`, and an allowlist behind it**: `POST /notice`,
   which is how CI's notice reaches host, and the `GET` routes the console reads -- the node's now
-  and its series, the apps, an app, its history and its series, the events, the disk. Everything
+  and its series, the apps, an app, its history, its series and its health, the events, the disk.
+  Everything
   else on that name answers `404`; Caddy adds no authentication and passes `Authorization` through,
   so host's own tokens are the only check. The name is reserved, so no app or route can take it.
 - **Everything else is asked over the tailnet**, by `mise run node <verb> <node>` on the author's
