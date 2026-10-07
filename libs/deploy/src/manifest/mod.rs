@@ -50,10 +50,17 @@ pub const WORKERS: &str = "workers";
 /// See platform's spec/architecture/services.md, "A service keeps one port".
 pub const PORTS: RangeInclusive<u16> = 10000..=32767;
 
+/// The characters a `display_name` may run to.
+pub const DISPLAY_NAME_LENGTH: usize = 40;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Manifest {
 	pub version: u32,
 	pub name: String,
+	/// What people are shown for it, never read by code. See spec/architecture/host.md, "One name
+	/// inside, and a domain label outside".
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub display_name: Option<String>,
 	pub placements: Vec<String>,
 	/// What a node runs. Absent from a service placed on Workers alone, and required on a node.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -301,6 +308,10 @@ pub struct Schedule {
 	/// Seconds before a run is called failed.
 	#[serde(default = "default_timeout")]
 	pub timeout: u64,
+	/// Each node's runs moved by its slot, so a node at a time takes the job. See platform's
+	/// spec/architecture/cron.md, "A weekly job is spread across the nodes, a day apart".
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub spread: Option<Spread>,
 }
 
 fn default_timeout() -> u64 {
@@ -324,6 +335,13 @@ pub enum Overlap {
 	#[default]
 	Skip,
 	Queue,
+}
+
+/// How far apart a job's runs fall across the nodes; `week` is the one there is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Spread {
+	Week,
 }
 
 /// Whether `expr` is shaped like a five-field cron expression: field count and character set

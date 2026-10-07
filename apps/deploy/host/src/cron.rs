@@ -2,7 +2,7 @@
 //! platform's spec/architecture/cron.md, "host gives `cron` the table".
 
 use crate::store::Deployed;
-use deploy::manifest::{CatchUp, Manifest, Overlap};
+use deploy::manifest::{CatchUp, Manifest, Overlap, Spread};
 use serde::Serialize;
 use std::path::Path;
 
@@ -25,7 +25,20 @@ struct Job {
 	catch_up: CatchUp,
 	overlap: Overlap,
 	timeout: u64,
+	/// Seconds every run is moved later by, from the job's `spread` and the node's slot.
+	offset: u64,
 	reach: Reach,
+}
+
+/// How much later `slot`'s runs of a job spread by `spread` fall: a day per slot for the first
+/// seven, then two hours more for each further turn of the week. See platform's
+/// spec/architecture/cron.md, "A weekly job is spread across the nodes, a day apart".
+fn offset(spread: Option<Spread>, slot: u32) -> u64 {
+	let slot = u64::from(slot);
+	match spread {
+		None => 0,
+		Some(Spread::Week) => slot % 7 * 86_400 + 2 * (slot / 7) * 3_600,
+	}
 }
 
 /// How `cron` asks: a scope through Caddy, for a service with `[api]`, or the path host mounted its
@@ -74,8 +87,8 @@ pub fn mounts_changed(desired: &[String], mounted: &[String]) -> bool {
 }
 
 /// The table for every app that declares schedules and is reachable, built from the state as it
-/// is now. Pure, so it is tested without a directory to write into.
-fn table(apps: &[Deployed]) -> Table {
+/// is now, for the node at `slot`. Pure, so it is tested without a directory to write into.
+fn table(apps: &[Deployed], slot: u32) -> Table {
 	let mut jobs = Vec::new();
 	for app in apps {
 		if app.manifest.schedules.is_empty() {
@@ -92,6 +105,7 @@ fn table(apps: &[Deployed]) -> Table {
 				catch_up: schedule.catch_up,
 				overlap: schedule.overlap,
 				timeout: schedule.timeout,
+				offset: offset(schedule.spread, slot),
 				reach: reach.clone(),
 			});
 		}
@@ -99,14 +113,15 @@ fn table(apps: &[Deployed]) -> Table {
 	Table { jobs }
 }
 
-/// Write the table into `directory` (`cron`'s own), through a temporary file and a rename, as
-/// `node::tell` does for the meter. Nothing when `cron` has no directory yet -- it is not deployed.
-pub async fn write(apps: &[Deployed], directory: &Path) -> std::io::Result<()> {
+/// Write the table for the node at `slot` into `directory` (`cron`'s own), through a temporary file
+/// and a rename, as `node::tell` does for the meter. Nothing when `cron` has no directory yet -- it
+/// is not deployed.
+pub async fn write(apps: &[Deployed], slot: u32, directory: &Path) -> std::io::Result<()> {
 	if !tokio::fs::try_exists(directory).await.unwrap_or(false) {
 		return Ok(());
 	}
 	let temporary = directory.join(format!("{TABLE}.next"));
-	tokio::fs::write(&temporary, serde_json::to_vec(&table(apps))?).await?;
+	tokio::fs::write(&temporary, serde_json::to_vec(&table(apps, slot))?).await?;
 	tokio::fs::rename(&temporary, directory.join(TABLE)).await?;
 	Ok(())
 }
@@ -133,7 +148,7 @@ mod tests {
 		let text = format!(
 			"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 4 * * *\"\npath = \"/jobs/refresh\"\n"
 		);
-		let table = table(&[app(&text)]);
+		let table = table(&[app(&text)], 0);
 		assert_eq!(table.jobs.len(), 1);
 		let job = &table.jobs[0];
 		assert_eq!((job.service.as_str(), job.name.as_str()), ("geo", "refresh"));
@@ -147,7 +162,7 @@ mod tests {
 	fn a_socket_only_service_is_reached_at_where_host_mounts_it() {
 		let text = "version = 1\nname = \"apt\"\nplacements = [\"home\"]\n[container]\nhealth = \"/health\"\nsocket = \"apt.sock\"\n[data]\npath = \"/data\"\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\ntimeout = 1800\n";
 		let deployed = app(text);
-		let table = table(std::slice::from_ref(&deployed));
+		let table = table(std::slice::from_ref(&deployed), 0);
 		let job = &table.jobs[0];
 		assert_eq!(job.reach, Reach::Socket { socket: "/sockets/apt/apt.sock".into() });
 		assert_eq!(job.timeout, 1800);
@@ -156,7 +171,7 @@ mod tests {
 
 	#[test]
 	fn an_app_with_no_schedules_names_no_job_and_no_socket() {
-		let table = table(&[app(GEO)]);
+		let table = table(&[app(GEO)], 0);
 		assert!(table.jobs.is_empty());
 		assert!(socket_services(&[app(GEO)]).is_empty());
 	}
@@ -166,9 +181,31 @@ mod tests {
 		let text = format!(
 			"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 4 * * *\"\npath = \"/jobs/refresh\"\n"
 		);
-		let value = serde_json::to_value(table(&[app(&text)])).unwrap();
+		let value = serde_json::to_value(table(&[app(&text)], 0)).unwrap();
 		assert_eq!(value["jobs"][0]["reach"], serde_json::json!({ "scope": "geo" }));
 		assert_eq!(value["jobs"][0]["catch_up"], "once");
+		assert_eq!(value["jobs"][0]["offset"], 0);
+	}
+
+	#[test]
+	fn a_weekly_spread_moves_each_slot_a_day_then_two_hours() {
+		let day = 86_400;
+		let hour = 3_600;
+		assert_eq!(offset(None, 13), 0);
+		assert_eq!(offset(Some(Spread::Week), 0), 0);
+		assert_eq!(offset(Some(Spread::Week), 6), 6 * day);
+		assert_eq!(offset(Some(Spread::Week), 7), 2 * hour);
+		assert_eq!(offset(Some(Spread::Week), 13), 6 * day + 2 * hour);
+		assert_eq!(offset(Some(Spread::Week), 83), 6 * day + 22 * hour);
+	}
+
+	#[test]
+	fn a_spread_job_in_the_table_carries_its_slot_s_offset() {
+		let text = format!(
+			"{GEO}\n[[schedules]]\nname = \"refresh\"\ncron = \"0 8 * * 0\"\npath = \"/jobs/refresh\"\nspread = \"week\"\n"
+		);
+		assert_eq!(table(&[app(&text)], 3).jobs[0].offset, 3 * 86_400);
+		assert_eq!(table(&[app(&text)], 0).jobs[0].offset, 0);
 	}
 
 	#[test]

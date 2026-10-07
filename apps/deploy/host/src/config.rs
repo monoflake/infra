@@ -13,6 +13,9 @@ pub const PORT: u16 = 11011;
 pub struct Config {
 	/// This node's placement name, matched against what a declaration lists.
 	pub node: String,
+	/// This node's position in infra's `nodes/nodes.toml`, from `NODE_SLOT`, 0 when unset: what a
+	/// spread job's runs are moved by. See platform's spec/architecture/cron.md.
+	pub slot: u32,
 	pub token: String,
 	/// A second token, from `HOST_READ_TOKEN`, that reads and never acts; none when it is unset.
 	pub read_token: Option<String>,
@@ -100,8 +103,12 @@ impl Config {
 		let apps_root = PathBuf::from(optional("APPS_ROOT", "/data/apps"));
 		let caddy_root = apps_root.join("caddy");
 		let own_container = optional("OWN_CONTAINER", "host");
+		let slot = optional("NODE_SLOT", "0")
+			.parse()
+			.map_err(|e: std::num::ParseIntError| Missing::Unreadable("NODE_SLOT", e.to_string()))?;
 		Ok(Self {
 			node: required("NODE")?,
+			slot,
 			token: required("HOST_TOKEN")?,
 			read_token: std::env::var("HOST_READ_TOKEN").ok().filter(|value| !value.is_empty()),
 			listen,

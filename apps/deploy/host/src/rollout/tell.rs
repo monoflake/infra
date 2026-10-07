@@ -35,7 +35,7 @@ pub async fn tell_cron(host: &Arc<Host>) {
 	};
 	let Some(scheduler) = host.config.grants.holder(Role::Scheduler) else { return };
 	let directory = host.volumes.data(scheduler);
-	if let Err(error) = crate::cron::write(&apps, &directory).await {
+	if let Err(error) = crate::cron::write(&apps, host.config.slot, &directory).await {
 		eprintln!("host: writing cron's schedule table: {error}");
 		return;
 	}

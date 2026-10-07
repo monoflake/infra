@@ -2,7 +2,7 @@
 //! spec/architecture/host.md, "What a deployment may ask for is host's decision".
 
 use super::{
-	Api, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED, RESERVED_LABELS, SHAPES,
+	Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED, RESERVED_LABELS, SHAPES,
 	SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every, is_home,
 };
 use crate::sidecar::Driver;
@@ -19,6 +19,10 @@ pub enum Invalid {
 	Label(String),
 	#[error("`{0}` is reserved")]
 	Reserved(String),
+	#[error(
+		"display name `{0}` is not 1 to {DISPLAY_NAME_LENGTH} characters with no space at either end"
+	)]
+	DisplayName(String),
 	#[error("the declaration says `{declared}` but it was sent as `{requested}`")]
 	Mismatch { declared: String, requested: String },
 	#[error("`{name}` is not placed on `{node}`")]
@@ -102,6 +106,9 @@ impl Manifest {
 	fn check_rest(&self, requested: &str, node: &str) -> Result<(), Invalid> {
 		if self.name != requested {
 			return Err(Invalid::Mismatch { declared: self.name.clone(), requested: requested.into() });
+		}
+		if let Some(shown) = self.display_name.as_ref().filter(|shown| !sound_display_name(shown)) {
+			return Err(Invalid::DisplayName(shown.clone()));
 		}
 		if !self.placements.iter().any(|placement| placement == node) {
 			return Err(Invalid::NotPlaced { name: self.name.clone(), node: node.into() });
@@ -209,6 +216,11 @@ impl Manifest {
 		}
 		Ok(())
 	}
+}
+
+/// Whether a display name is free text people can read: not blank, trimmed, and short.
+fn sound_display_name(shown: &str) -> bool {
+	!shown.is_empty() && shown.trim() == shown && shown.chars().count() <= DISPLAY_NAME_LENGTH
 }
 
 /// Whether a schedule is shaped so `cron` could run it: exactly one clock, a path from `/`, and a

@@ -392,6 +392,46 @@ fn a_schedule_reads_its_defaults_and_checks_its_shape() {
 }
 
 #[test]
+fn a_display_name_is_short_trimmed_free_text() {
+	let shown = |value: &str| {
+		Manifest::parse(&GEO.replace("name = \"geo\"\n", &format!("name = \"geo\"\n{value}\n")))
+			.unwrap()
+	};
+	assert_eq!(shown("").display_name, None);
+	let geo = shown("display_name = \"IP Geolocation\"");
+	assert_eq!(geo.display_name.as_deref(), Some("IP Geolocation"));
+	assert_eq!(geo.check("geo", "rdu"), Ok(()));
+	let back = toml::to_string(&geo).unwrap();
+	assert_eq!(Manifest::parse(&back).unwrap().display_name.as_deref(), Some("IP Geolocation"));
+	let longest = "É".repeat(DISPLAY_NAME_LENGTH);
+	assert_eq!(shown(&format!("display_name = \"{longest}\"")).check("geo", "rdu"), Ok(()));
+	let too_long = "a".repeat(DISPLAY_NAME_LENGTH + 1);
+	for bad in ["", " ", " Geo", "Geo ", too_long.as_str()] {
+		assert_eq!(
+			shown(&format!("display_name = \"{bad}\"")).check("geo", "rdu"),
+			Err(Invalid::DisplayName(bad.into())),
+			"{bad:?}"
+		);
+	}
+}
+
+#[test]
+fn a_schedule_spreads_by_the_week_or_not_at_all() {
+	let spread = |value: &str| {
+		Manifest::parse(&format!(
+			"{GEO}\n[[schedules]]\nname = \"upgrade\"\ncron = \"0 8 * * 0\"\npath = \"/jobs/upgrade\"\n{value}\n"
+		))
+	};
+	assert_eq!(spread("").unwrap().schedules[0].spread, None);
+	let weekly = spread("spread = \"week\"").unwrap();
+	assert_eq!(weekly.schedules[0].spread, Some(Spread::Week));
+	assert_eq!(weekly.check("geo", "rdu"), Ok(()));
+	for other in ["spread = \"day\"", "spread = \"\"", "spread = 7"] {
+		assert!(matches!(spread(other), Err(Invalid::Malformed(_))), "{other}");
+	}
+}
+
+#[test]
 fn a_scheduled_service_answers_through_its_scope_or_its_socket() {
 	let socketed = Manifest::parse(
 		"version = 1\nname = \"probe\"\nplacements = [\"rdu\"]\n[container]\nhealth = \"/health\"\nsocket = \"probe.sock\"\n[data]\npath = \"/data\"\n[[schedules]]\nname = \"update\"\ncron = \"0 7 * * *\"\npath = \"/jobs/update\"\n",

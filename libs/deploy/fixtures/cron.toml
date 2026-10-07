@@ -16,11 +16,6 @@ memory_mb = 64
 [data]
 path = "/data"
 
-# The panel's alone, on the private side. See platform's spec/architecture/cron.md, "A job is
-# declared by the service that does it".
-[api]
-public = false
-
 # The scheduler: the table of every job and each socket service's directory, where the node grants
 # it. See spec/architecture/host.md, "A role is asked for by the app and granted by the node".
 [shape]
