@@ -505,7 +505,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tokio-util",
  "url",
 ]
 
@@ -855,7 +854,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

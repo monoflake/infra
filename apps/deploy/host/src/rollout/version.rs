@@ -208,8 +208,8 @@ pub(super) async fn archived(
 		// One deploy at a time on a node: two would snapshot, stop and route over each other.
 		let _one = host.deploying.lock().await;
 		let image = staged(store, id, Stage::Loading, async {
-			let file = tokio::fs::File::open(archive).await.map_err(Error::Archive)?;
-			let loaded = host.engine.load(name, tokio_util::io::ReaderStream::new(file)).await;
+			let file = deploy::uncached::read(archive).await.map_err(Error::Archive)?;
+			let loaded = host.engine.load(name, file).await;
 			loaded.map_err(Error::Load)
 		})
 		.await?;

@@ -11,6 +11,7 @@ pub mod http;
 pub mod manifest;
 pub mod replace;
 pub mod sidecar;
+pub mod uncached;
 pub mod volume;
 
 pub use engine::{Engine, Shape, Version};

@@ -15,7 +15,6 @@ use deploy::{Engine, Manifest, Shape, Version, Volumes};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 
 /// musl's allocator is slow under many small allocations, and images are built for speed; see
 /// spec/architecture/host.md, "An image is built for speed, and for any node of its architecture".
@@ -137,11 +136,11 @@ async fn upload(State(keeper): State<Arc<Keeper>>, mut parts: Multipart) -> Resp
 			Some("image") => {
 				let saved = async {
 					tokio::fs::create_dir_all(&keeper.incoming).await?;
-					let mut file = tokio::fs::File::create(&archive).await?;
+					let mut file = deploy::uncached::AsyncWriter::create(&archive).await?;
 					while let Some(chunk) = part.chunk().await? {
-						file.write_all(&chunk).await?;
+						file.write(&chunk).await?;
 					}
-					file.flush().await?;
+					file.finish().await?;
 					anyhow::Ok(())
 				};
 				if let Err(error) = saved.await {
@@ -186,10 +185,10 @@ async fn from_archive(
 			));
 		}
 		let _one = keeper.replacing.lock().await;
-		let file = tokio::fs::File::open(archive).await.map_err(|e| {
+		let file = deploy::uncached::read(archive).await.map_err(|e| {
 			Reply(StatusCode::INTERNAL_SERVER_ERROR, "service_unavailable", e.to_string())
 		})?;
-		let loaded = keeper.engine.load("host", tokio_util::io::ReaderStream::new(file)).await;
+		let loaded = keeper.engine.load("host", file).await;
 		let image = loaded
 			.map_err(|e| Reply(StatusCode::UNPROCESSABLE_ENTITY, "invalid_image", e.to_string()))?;
 		replace_host(keeper, Version { manifest, image }).await

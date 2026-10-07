@@ -181,6 +181,14 @@ keeper 64, the meter 32 and Caddy 128, against 50, 9, 19 and 20 measured on 2026
 **A ceiling is set against the peak, never the idle figure**: keeper idles at 9 MiB and passed 16
 fetching host's image, and at a ceiling of 16 it was killed mid-deploy.
 
+**A large file is written in chunks that leave the page cache as they land.** Pages a container
+dirties count against its own memory ceiling, so writing a 347 MiB image through host's 128 had
+the kernel kill host on `tyo` on 2026-10-07 with 16 MiB of its own in use. Every file host or keeper
+writes from a stream -- an upload, an artifact's zip, the image taken out of it, a report -- is
+flushed every few MiB and the flushed range dropped from the cache, and a large file read back
+whole, as an image is when loaded, drops what it has read the same way. The ceiling stays what the
+process needs, not what the files it handles weigh.
+
 ### An image is built for speed, and for any node of its architecture
 
 Every Rust program's image compiles its binary with the `container` profile in this repository's `Cargo.toml`, as in the platform's: full

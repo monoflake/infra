@@ -20,7 +20,6 @@ use deploy::manifest::{self, is_home};
 use deploy::replace::Error as Failed;
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 
 pub fn router(host: Arc<Host>) -> Router {
 	let guarded = Router::new()
@@ -451,11 +450,11 @@ async fn save(
 	if let Some(parent) = path.parent() {
 		tokio::fs::create_dir_all(parent).await?;
 	}
-	let mut file = tokio::fs::File::create(path).await?;
+	let mut file = deploy::uncached::AsyncWriter::create(path).await?;
 	while let Some(chunk) = part.chunk().await? {
-		file.write_all(&chunk).await?;
+		file.write(&chunk).await?;
 	}
-	file.flush().await?;
+	file.finish().await?;
 	Ok(())
 }
 

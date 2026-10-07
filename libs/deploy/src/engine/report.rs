@@ -5,13 +5,13 @@
 use super::shape::socket_service_of;
 use super::{Engine, Error, VERSION_LABEL, Version, absent};
 use crate::manifest::Manifest;
+use crate::uncached::AsyncWriter;
 use bollard::models::{ContainerInspectResponse, ContainerSummary, NetworkInspect};
 use bollard::query_parameters::{ListContainersOptions, LogsOptionsBuilder};
 use futures_util::StreamExt;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
 
 /// One image on the machine, as the panel lists it.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -223,13 +223,13 @@ impl Engine {
 		let path = directory.join(format!("{stamp}-{short}.log"));
 		let failed = |source| Error::Archive { path: path.display().to_string(), source };
 		tokio::fs::create_dir_all(directory).await.map_err(failed)?;
-		let mut file = tokio::fs::File::create(&path).await.map_err(failed)?;
+		let mut file = AsyncWriter::create(&path).await.map_err(failed)?;
 		let options = LogsOptionsBuilder::new().stdout(true).stderr(true).timestamps(true).build();
 		let mut stream = self.docker.logs(name, Some(options));
 		while let Some(chunk) = stream.next().await {
-			file.write_all(&chunk?.into_bytes()).await.map_err(failed)?;
+			file.write(&chunk?.into_bytes()).await.map_err(failed)?;
 		}
-		file.flush().await.map_err(failed)?;
+		file.finish().await.map_err(failed)?;
 		Ok(Some(path))
 	}
 

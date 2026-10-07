@@ -4,6 +4,7 @@
 //! nothing pushes into it".
 
 use crate::egress::{self, Egress};
+use crate::uncached::{AsyncWriter, Writer};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty};
 use hyper::Request;
@@ -14,7 +15,6 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
 
 /// The workflow that builds images; a run of any other builds nothing to deploy.
 pub const WORKFLOW: &str = ".github/workflows/deploy.yml";
@@ -282,16 +282,16 @@ impl GitHub {
 
 		// Named by a counter, like an upload, so nothing GitHub answered becomes part of a path.
 		let zip = crate::arrival(directory);
-		let mut file = tokio::fs::File::create(&zip).await.map_err(io(zip.display().to_string()))?;
+		let mut file = AsyncWriter::create(&zip).await.map_err(io(zip.display().to_string()))?;
 		let mut hasher = Sha256::new();
 		while let Some(frame) = response.body_mut().frame().await {
 			let frame = frame.map_err(|e| Error::Http(e.to_string()))?;
 			if let Some(data) = frame.data_ref() {
 				hasher.update(data);
-				file.write_all(data).await.map_err(io(zip.display().to_string()))?;
+				file.write(data).await.map_err(io(zip.display().to_string()))?;
 			}
 		}
-		file.flush().await.map_err(io(zip.display().to_string()))?;
+		file.finish().await.map_err(io(zip.display().to_string()))?;
 		// GitHub's digest is the SHA-256 of the zip as it is downloaded; measured on run 36368010996.
 		let digest = format!("sha256:{}", hex(&hasher.finalize()));
 		if !digest.eq_ignore_ascii_case(&artifact.digest) {
@@ -320,8 +320,9 @@ fn unpack(name: &str, zip: &Path, image: &Path) -> Result<String, Error> {
 	let mut archive = zip::ZipArchive::new(file).map_err(|e| shape(e.to_string()))?;
 	{
 		let mut entry = archive.by_name("image.tar").map_err(|e| shape(e.to_string()))?;
-		let mut out = std::fs::File::create(image).map_err(io(image.display().to_string()))?;
+		let mut out = Writer::create(image).map_err(io(image.display().to_string()))?;
 		std::io::copy(&mut entry, &mut out).map_err(io(image.display().to_string()))?;
+		out.finish().map_err(io(image.display().to_string()))?;
 	}
 	let mut declaration = String::new();
 	let mut entry = archive.by_name("service.toml").map_err(|e| shape(e.to_string()))?;
