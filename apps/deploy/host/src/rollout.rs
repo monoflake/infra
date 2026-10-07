@@ -3,6 +3,7 @@
 //! spec/architecture/host.md.
 
 mod admit;
+mod beside;
 mod panel;
 mod remove;
 mod route;
@@ -21,8 +22,9 @@ pub(crate) use shape::bound;
 pub use tell::{tell_cron, tell_telemetry};
 pub use version::from_archive;
 
-use crate::{caddy, store};
-use deploy::manifest::Invalid;
+use crate::{Host, caddy, store};
+use deploy::manifest::{Invalid, Manifest};
+use deploy::replace::Asked;
 use deploy::{engine, replace};
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +72,18 @@ pub enum Error {
 	Driver(String),
 	#[error(transparent)]
 	Refused(#[from] crate::grants::Refused),
+}
+
+/// Where `manifest`'s health is asked on this node, exactly as its deploy's check asks it; none for
+/// a driver, which runs no container of its own.
+pub fn asked(host: &Host, manifest: &Manifest) -> Option<Asked> {
+	if host.config.grants.driver_of(manifest).is_some() {
+		return None;
+	}
+	let name = manifest.name.as_str();
+	let networked = !admit::UNNETWORKED.contains(&name);
+	let container = if name == "host" { host.config.own_container.as_str() } else { name };
+	replace::asked_at(manifest, container, networked, &host.volumes.data(name))
 }
 
 #[derive(Debug, serde::Serialize)]

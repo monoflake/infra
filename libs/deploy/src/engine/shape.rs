@@ -223,6 +223,20 @@ impl Engine {
 	/// declaration says; see spec/architecture/host.md, "What a deployment may ask for is host's
 	/// decision".
 	pub async fn run(&self, version: &Version, shape: &Shape, data: &Path) -> Result<(), Error> {
+		self.run_as(version, shape, data, &version.manifest.name).await
+	}
+
+	/// `run`, under `container` rather than the app's own name: a version started beside the one
+	/// it replaces. Everything else -- its network, its label, its mounts -- is the app's. See
+	/// spec/architecture/host.md, "An app chooses how it is rolled out, and keeping nothing earns a
+	/// gapless one".
+	pub async fn run_as(
+		&self,
+		version: &Version,
+		shape: &Shape,
+		data: &Path,
+		container: &str,
+	) -> Result<(), Error> {
 		let manifest = &version.manifest;
 		let name = &manifest.name;
 		// A ceiling on every container, and no swap past it: a limit that can be exceeded into swap
@@ -365,10 +379,10 @@ impl Engine {
 			..Default::default()
 		};
 		match shape {
-			Shape::Steward { .. } => self.create_steward(name, body).await?,
-			_ => self.create(name, body).await?,
+			Shape::Steward { .. } => self.create_steward(container, body).await?,
+			_ => self.create(container, body).await?,
 		}
-		self.docker.start_container(name, None).await?;
+		self.docker.start_container(container, None).await?;
 		Ok(())
 	}
 

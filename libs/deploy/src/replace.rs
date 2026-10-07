@@ -3,6 +3,7 @@
 //! check put back both the directory and the version before. See spec/architecture/host.md, "One
 //! version runs, and a failed deploy puts the last one back".
 
+use crate::Manifest;
 use crate::engine::{self, Engine, Shape, Version};
 use crate::sidecar::{Driver, Sidecar};
 use crate::volume::{self, Volumes};
@@ -28,6 +29,13 @@ pub enum Error {
 	/// A sidecar did not become healthy on its own, outside any app's deploy.
 	#[error("{0}")]
 	Sidecar(String),
+	/// The new version, started beside the running one, did not take over; the running one was
+	/// never touched and is still routed.
+	#[error("{reason}; the running version was left as it was\n{logs}")]
+	Beside { reason: String, logs: String },
+	/// The new version took the route, and putting it in the old one's place failed after.
+	#[error("{0}")]
+	Switched(String),
 }
 
 /// The sidecars each side of a replacement runs beside its app, one per driver it declares.
@@ -189,39 +197,88 @@ async fn make(directory: &Path, owner: Option<(u32, u32)>) -> Result<(), Error> 
 	Ok(())
 }
 
-/// Where a health check dials `name` at `port`: on its own network when it has one, since the
-/// checker may share several with it; see `on_own_network`.
-fn checked_at(name: &str, port: u16, shape: &Shape) -> String {
-	if shape.networked() { engine::on_own_network(name, port) } else { format!("{name}:{port}") }
+/// Where a health check asks an app: on its socket, or at its port.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Asked {
+	/// `host:port`, as host or keeper dials it.
+	At(String),
+	/// The socket file, as the machine sees it.
+	Socket(PathBuf),
 }
 
-/// Poll the declared path until it answers 2xx, the container exits, or the deadline passes. An app
-/// on a socket is asked there, in `data`, its directory as the machine sees it.
+impl Asked {
+	/// The status `path` is answered with, and the body.
+	pub async fn get(
+		&self,
+		path: &str,
+		within: Duration,
+	) -> Result<(u16, String), crate::http::Error> {
+		match self {
+			Asked::At(address) => crate::http::get_within(address, path, within).await,
+			Asked::Socket(socket) => crate::http::get_unix_within(socket, path, within).await,
+		}
+	}
+}
+
+/// Where `manifest`'s health is asked of the container `container`: its socket in `data`, its
+/// directory as the machine sees it, or its port -- on the app's own network when it has one,
+/// since the checker may share several with it; see `engine::on_own_network`. None for a
+/// declaration with no container.
+pub fn asked_at(
+	manifest: &Manifest,
+	container: &str,
+	networked: bool,
+	data: &Path,
+) -> Option<Asked> {
+	let declared = manifest.container.as_ref()?;
+	if let Some(socket) = &declared.socket {
+		return Some(Asked::Socket(data.join(socket)));
+	}
+	let port = declared.port.unwrap_or_default();
+	Some(Asked::At(if networked {
+		format!("{container}.{}:{port}", engine::network_of(&manifest.name))
+	} else {
+		format!("{container}:{port}")
+	}))
+}
+
+/// Poll the declared path of the app's container until it answers 2xx, the container exits, or
+/// the deadline passes.
 async fn healthy(
 	engine: &Engine,
 	version: &Version,
 	shape: &Shape,
 	data: &Path,
 ) -> Result<(), String> {
-	let Some(container) = &version.manifest.container else {
+	let name = version.manifest.name.as_str();
+	let Some(asked) = asked_at(&version.manifest, name, shape.networked(), data) else {
 		return Err("the declaration has no container to check".into());
 	};
-	let deadline = container.health_timeout.map_or(DEFAULT_DEADLINE, Duration::from_secs);
-	let socket = container.socket.as_ref().map(|socket| data.join(socket));
-	let address = checked_at(&version.manifest.name, container.port.unwrap_or_default(), shape);
+	healthy_at(engine, version, name, &asked).await
+}
+
+/// `healthy`, of the container `container` runs `version` in, asked at `asked`: a version beside
+/// its predecessor, asked at its address, since a name it alone has would not resolve through
+/// musl, which takes no underscore in a host name.
+pub async fn healthy_at(
+	engine: &Engine,
+	version: &Version,
+	container: &str,
+	asked: &Asked,
+) -> Result<(), String> {
+	let Some(declared) = &version.manifest.container else {
+		return Err("the declaration has no container to check".into());
+	};
+	let deadline = declared.health_timeout.map_or(DEFAULT_DEADLINE, Duration::from_secs);
 	let started = tokio::time::Instant::now();
 	let mut last = String::from("no answer yet");
 	while started.elapsed() < deadline {
-		if !engine.running(&version.manifest.name).await.map_err(|e| e.to_string())? {
+		if !engine.running(container).await.map_err(|e| e.to_string())? {
 			return Err("the container exited during its health check".into());
 		}
-		let answered = match &socket {
-			Some(socket) => crate::http::status_unix(socket, &container.health).await,
-			None => crate::http::status(&address, &container.health).await,
-		};
-		match answered {
-			Ok(status) if (200..300).contains(&status) => return Ok(()),
-			Ok(status) => last = format!("{} answered {status}", container.health),
+		match asked.get(&declared.health, crate::http::ATTEMPT).await {
+			Ok((status, _)) if (200..300).contains(&status) => return Ok(()),
+			Ok((status, _)) => last = format!("{} answered {status}", declared.health),
 			Err(error) => last = error.to_string(),
 		}
 		tokio::time::sleep(Duration::from_secs(1)).await;
@@ -231,15 +288,27 @@ async fn healthy(
 
 #[cfg(test)]
 mod tests {
-	use super::checked_at;
-	use crate::engine::Shape;
+	use super::{Asked, asked_at};
+	use crate::Manifest;
+	use std::path::Path;
 
 	#[test]
-	fn a_networked_app_is_checked_on_its_own_network_and_the_rest_by_name() {
+	fn a_networked_app_is_asked_on_its_own_network_and_the_rest_by_name() {
+		let manifest = |name: &str, answer: &str| {
+			let text = format!(
+				"version = 1\nname = \"{name}\"\nplacements = [\"rdu\"]\n[container]\n{answer}\n\
+				 health = \"/health\"\n"
+			);
+			Manifest::parse(&text).unwrap()
+		};
+		let data = Path::new("/data/apps/x/data");
 		// keeper checking host shares app-keeper and app-host with it, and host binds on app-host.
-		let platform = Shape::Platform { env: vec![] };
-		assert_eq!(checked_at("host", 11011, &platform), "host.app-host:11011");
-		let edge = Shape::Edge { env: vec![] };
-		assert_eq!(checked_at("caddy", 2019, &edge), "caddy:2019");
+		let host = manifest("host", "port = 11011");
+		assert_eq!(asked_at(&host, "host", true, data), Some(Asked::At("host.app-host:11011".into())));
+		let caddy = manifest("caddy", "port = 2019");
+		assert_eq!(asked_at(&caddy, "caddy", false, data), Some(Asked::At("caddy:2019".into())));
+		let meter = manifest("meter", "socket = \"meter.sock\"");
+		let socket = asked_at(&meter, "meter", false, data);
+		assert_eq!(socket, Some(Asked::Socket(data.join("meter.sock"))));
 	}
 }

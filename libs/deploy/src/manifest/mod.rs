@@ -87,6 +87,38 @@ pub struct Manifest {
 	/// The driver it is, run by host beside every app declaring one, when the node grants it.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub driver: Option<DriverRequest>,
+	/// How a new version takes the old one's place; `replace` when absent, and left out when it is.
+	#[serde(default, skip_serializing_if = "Rollout::is_replace")]
+	pub rollout: Rollout,
+}
+
+/// How a new version of an app takes the old one's place. See spec/architecture/host.md, "An app
+/// chooses how it is rolled out, and keeping nothing earns a gapless one".
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Rollout {
+	/// Stopped, snapshotted and started again on its directory, a few seconds down.
+	#[default]
+	Replace,
+	/// Started beside the running one and switched to once healthy, for an app that keeps nothing.
+	Beside,
+	/// Deployed by no run's notice; the operator deploys it a node at a time.
+	Manual,
+}
+
+impl Rollout {
+	pub fn is_replace(&self) -> bool {
+		*self == Rollout::Replace
+	}
+
+	/// As a declaration spells it.
+	pub fn word(self) -> &'static str {
+		match self {
+			Rollout::Replace => "replace",
+			Rollout::Beside => "beside",
+			Rollout::Manual => "manual",
+		}
+	}
 }
 
 /// A role asked for, one of [`SHAPES`].

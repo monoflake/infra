@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Long enough for a slow answer from a loaded machine, short enough that a hung app fails its
 /// check inside the deploy's own deadline rather than holding it.
-const ATTEMPT: Duration = Duration::from_secs(5);
+pub(crate) const ATTEMPT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -19,8 +19,8 @@ pub enum Error {
 	Connect(std::io::Error),
 	#[error("HTTP: {0}")]
 	Http(#[from] hyper::Error),
-	#[error("no answer within {} seconds", ATTEMPT.as_secs())]
-	Timeout,
+	#[error("no answer within {} seconds", .0.as_secs())]
+	Timeout(Duration),
 	#[error("the request could not be built: {0}")]
 	Request(#[from] hyper::http::Error),
 }
@@ -41,13 +41,21 @@ where
 /// The status a container answers `path` with at `address`, which Docker's DNS resolves on the
 /// network host shares with it.
 pub async fn status(address: &str, path: &str) -> Result<u16, Error> {
+	Ok(get_within(address, path, ATTEMPT).await?.0)
+}
+
+/// The status and the body a container answers `path` with at `address`, within `within`.
+pub async fn get_within(
+	address: &str,
+	path: &str,
+	within: Duration,
+) -> Result<(u16, String), Error> {
 	let attempt = async {
 		let stream = tokio::net::TcpStream::connect(address).await.map_err(Error::Connect)?;
 		let request = Request::get(path).header("host", address).body(Full::new(Bytes::new()))?;
 		send(stream, request).await
 	};
-	let (status, _) = tokio::time::timeout(ATTEMPT, attempt).await.map_err(|_| Error::Timeout)??;
-	Ok(status)
+	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
 }
 
 /// The status an app with no network answers `path` with on its socket.
@@ -57,13 +65,22 @@ pub async fn status_unix(socket: &Path, path: &str) -> Result<u16, Error> {
 
 /// GET `path` from an app on its socket, for its status and body: host asking the meter.
 pub async fn get_unix(socket: &Path, path: &str) -> Result<(u16, String), Error> {
+	get_unix_within(socket, path, ATTEMPT).await
+}
+
+/// `get_unix`, within `within`.
+pub async fn get_unix_within(
+	socket: &Path,
+	path: &str,
+	within: Duration,
+) -> Result<(u16, String), Error> {
 	let attempt = async {
 		let stream = tokio::net::UnixStream::connect(socket).await.map_err(Error::Connect)?;
 		// Loopback as `Host`, which Caddy's admin socket insists on and any other socket ignores.
 		let request = Request::get(path).header("host", "127.0.0.1").body(Full::new(Bytes::new()))?;
 		send(stream, request).await
 	};
-	tokio::time::timeout(ATTEMPT, attempt).await.map_err(|_| Error::Timeout)?
+	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
 }
 
 /// POST a JSON body to `address` over a container network, for its status: keeper passing a run
@@ -77,7 +94,8 @@ pub async fn post(address: &str, path: &str, body: Vec<u8>) -> Result<u16, Error
 			.body(Full::new(Bytes::from(body)))?;
 		send(stream, request).await
 	};
-	let (status, _) = tokio::time::timeout(ATTEMPT, attempt).await.map_err(|_| Error::Timeout)??;
+	let (status, _) =
+		tokio::time::timeout(ATTEMPT, attempt).await.map_err(|_| Error::Timeout(ATTEMPT))??;
 	Ok(status)
 }
 
@@ -90,7 +108,6 @@ pub async fn post_unix(socket: &Path, path: &str, body: Vec<u8>) -> Result<(u16,
 		.header("host", "127.0.0.1")
 		.header("content-type", "application/json")
 		.body(Full::new(Bytes::from(body)))?;
-	tokio::time::timeout(Duration::from_secs(30), send(stream, request))
-		.await
-		.map_err(|_| Error::Timeout)?
+	let within = Duration::from_secs(30);
+	tokio::time::timeout(within, send(stream, request)).await.map_err(|_| Error::Timeout(within))?
 }

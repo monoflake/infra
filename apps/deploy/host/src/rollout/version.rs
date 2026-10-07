@@ -4,13 +4,14 @@
 use super::Error;
 use super::Outcome;
 use super::admit::{RESOLVER, admit, admitted};
+use super::beside::{self, Plan};
 use super::route::{attach, route};
 use super::shape::{bound, shape_of};
 use super::tell::{tell_cron, tell_telemetry};
 use crate::sidecars::{self, drive};
 use crate::store::{Action, Deployed, Source, Stage};
 use crate::{Host, store};
-use deploy::manifest::Manifest;
+use deploy::manifest::{Manifest, Rollout};
 use deploy::replace::{self, Beside, replace_beside};
 use deploy::sidecar::Driver;
 use deploy::{Shape, Version};
@@ -18,11 +19,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The one step every action that runs a version shares: replace what runs with `next`, restoring
-/// `restore` first, and answer with the snapshot taken before `next` started. A driver has no
-/// container and so no snapshot: running it is moving every sidecar of its kind onto it.
+/// The one step every action that runs a version shares, as event `id`: replace what runs with
+/// `next`, restoring `restore` first, and answer with the snapshot taken before `next` started. A
+/// driver has no container and so no snapshot: running it is moving every sidecar of its kind onto
+/// it. Nor has an app rolled out beside what runs, which keeps nothing to snapshot.
 pub(super) async fn run_version(
 	host: &Host,
+	id: i64,
 	next: &Version,
 	current: Option<&Version>,
 	restore: Option<&Path>,
@@ -61,6 +64,25 @@ pub(super) async fn run_version(
 	// The tunnel has no network of its own for host to ask its health on; host stands on the edge.
 	if matches!(shape, Shape::Tunnel { .. }) {
 		host.engine.join(deploy::engine::EDGE_NETWORK, &members[..1], false).await?;
+	}
+	// A rollback with data puts a directory back, which only a replacement does.
+	if next.manifest.rollout == Rollout::Beside && restore.is_none() {
+		let available = match current {
+			Some(_) => beside::available().await,
+			None => None,
+		};
+		match beside::plan(next, current, available) {
+			Plan::Beside => {
+				beside::roll(host, id, next, &shape, &members).await?;
+				return Ok(None);
+			}
+			Plan::Replace(Some(why)) => {
+				if let Err(error) = host.store.note(id, &why) {
+					eprintln!("host: recording event {id}: {error}");
+				}
+			}
+			Plan::Replace(None) => {}
+		}
 	}
 	let beside = Beside { next: &beside_next, current: &beside_current };
 	let snapshot =
@@ -154,7 +176,7 @@ pub(super) async fn deploy(
 			.app(&name)?
 			.map(|current| Version { manifest: current.manifest, image: current.image });
 		let next = Version { manifest, image };
-		let snapshot = run_version(host, &next, current.as_ref(), None).await?;
+		let snapshot = run_version(host, id, &next, current.as_ref(), None).await?;
 		host.store.put_app(&Deployed {
 			manifest: next.manifest,
 			image: next.image.clone(),

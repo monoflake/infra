@@ -38,8 +38,9 @@ USAGE = """usage:
   node redeploy <name> <app>
   node rollback <name> <app> [--with-data]
   node remove <name> <app> [--drop-data]
-  node deploy <name> --run RUN_ID [--repository OWNER/NAME]
+  node deploy <name> --run RUN_ID [--repository OWNER/NAME] [--app APP]
 each also takes --dry-run, to say what it would ask and ask nothing
+--app deploys that one app of the run, and is how an app rolled out by hand is deployed
 
   mise run node apps tyo
   mise run node events rdu geo --limit 20
@@ -47,7 +48,8 @@ each also takes --dry-run, to say what it would ask and ask nothing
   mise run node redeploy tyo deployer
   mise run node rollback buf geo --with-data
   mise run node remove tyo panel
-  mise run node deploy hnd --run 12345678 --repository monoflake/platform"""
+  mise run node deploy hnd --run 12345678 --repository monoflake/platform
+  mise run node deploy rdu --run 12345678 --repository monoflake/platform --app database"""
 
 
 def fail(message):
@@ -231,7 +233,7 @@ def option(arguments, flag):
 
 def plan(verb, arguments):
 	"""What a verb asks: each request as (container, method, path, body), and how to show it."""
-	valued = {option(arguments, flag) for flag in ("--limit", "--run", "--repository")}
+	valued = {option(arguments, flag) for flag in ("--limit", "--run", "--repository", "--app")}
 	words = [a for a in arguments if not a.startswith("-") and a not in valued]
 	app = words[0] if words else None
 	if verb == "apps":
@@ -264,7 +266,15 @@ def plan(verb, arguments):
 	# Both receivers the hook tells, so a run that built host reaches keeper as well. See
 	# spec/architecture/host.md, "A run that built host is keeper's first, and host's only after".
 	notice = {"run": int(run), "repository": option(arguments, "--repository") or REPOSITORY}
-	return [(HOST, "POST", "/notice", notice), (KEEPER, "POST", "/notice", notice)], None
+	only = option(arguments, "--app")
+	if only is None:
+		return [(HOST, "POST", "/notice", notice), (KEEPER, "POST", "/notice", notice)], None
+	# One app of the run, host's alone: keeper deploys host and nothing else. See
+	# spec/architecture/host.md, "An app chooses how it is rolled out, and keeping nothing earns a
+	# gapless one".
+	if only == "host":
+		fail(f"host is keeper's to deploy; leave out --app\n{USAGE}")
+	return [(HOST, "POST", "/notice", {**notice, "app": only})], None
 
 
 def main(verb, rest, nodes):

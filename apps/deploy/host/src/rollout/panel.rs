@@ -64,7 +64,7 @@ pub async fn redeploy(host: &Arc<Host>, name: &str) -> Result<Outcome, Error> {
 	)?;
 	let result = async {
 		let current = Version { manifest: app.manifest.clone(), image: app.image.clone() };
-		let snapshot = run_version(host, &current, Some(&current), None).await?;
+		let snapshot = run_version(host, id, &current, Some(&current), None).await?;
 		host.store.put_app(&Deployed { deployed_at: jiff::Timestamp::now().to_string(), ..app })?;
 		host.store.hold(name, false)?;
 		Ok(((), snapshot))
@@ -101,7 +101,7 @@ pub async fn rollback(host: &Arc<Host>, name: &str, with_data: bool) -> Result<O
 	let id = host.store.record(name, action, &source, image, running, Some(Stage::Starting))?;
 	let result = async {
 		let current = Version { manifest: app.manifest.clone(), image: app.image.clone() };
-		let snapshot = run_version(host, &previous, Some(&current), restore.as_deref()).await?;
+		let snapshot = run_version(host, id, &previous, Some(&current), restore.as_deref()).await?;
 		host.store.put_app(&Deployed {
 			manifest: previous.manifest.clone(),
 			image: previous.image.clone(),

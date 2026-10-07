@@ -3,8 +3,8 @@
 
 use super::{
 	Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
-	RESERVED_LABELS, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every,
-	is_home,
+	RESERVED_LABELS, Rollout, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron,
+	is_every, is_home,
 };
 use crate::sidecar::Driver;
 
@@ -75,6 +75,24 @@ pub enum Invalid {
 	PeerPort(u16),
 	#[error("`[driver]` provides `{0}`, and a driver is one of objects and postgres")]
 	Driver(String),
+	#[error(
+		"`rollout = \"beside\"` runs two versions at once, and `[data]` would have both write it"
+	)]
+	BesideData,
+	#[error(
+		"`rollout = \"beside\"` runs two versions at once, and one socket cannot answer for both"
+	)]
+	BesideSocket,
+	#[error(
+		"`rollout = \"beside\"` runs two versions at once, and `[{0}]` runs a sidecar over the app's own directory"
+	)]
+	BesideSidecar(String),
+	#[error("`rollout = \"beside\"` is for a plain sandboxed app, and this one asks to be `{0}`")]
+	BesideRole(String),
+	#[error("`{0}` is infra's own, shaped by its name, and is replaced in place")]
+	BesideOwn(String),
+	#[error("`{0}` is too long to run beside itself under a name of its own, at most 63 characters")]
+	BesideName(String),
 }
 
 impl Manifest {
@@ -228,6 +246,39 @@ impl Manifest {
 			if self.api.is_none() && container.socket.is_none() {
 				return Err(Invalid::Unscheduled(self.name.clone()));
 			}
+		}
+		if self.rollout == Rollout::Beside {
+			self.check_beside()?;
+		}
+		Ok(())
+	}
+
+	/// Whether two of its containers can run at once, which `beside` does for a moment: nothing on
+	/// its node to write twice, nothing published or shared that one container holds, and the plain
+	/// sandbox. See spec/architecture/host.md, "An app chooses how it is rolled out, and keeping
+	/// nothing earns a gapless one".
+	pub fn check_beside(&self) -> Result<(), Invalid> {
+		if OWN.contains(&self.name.as_str()) {
+			return Err(Invalid::BesideOwn(self.name.clone()));
+		}
+		if self.container.as_ref().is_some_and(|container| container.socket.is_some()) {
+			return Err(Invalid::BesideSocket);
+		}
+		if self.data.is_some() {
+			return Err(Invalid::BesideData);
+		}
+		if let Some(driver) = self.drivers().next() {
+			return Err(Invalid::BesideSidecar(driver.name().into()));
+		}
+		if let Some(shape) = &self.shape {
+			return Err(Invalid::BesideRole(shape.kind.clone()));
+		}
+		if let Some(driver) = &self.driver {
+			return Err(Invalid::BesideRole(format!("the {} driver", driver.provides)));
+		}
+		// A container's name on a network is a DNS label, 63 characters at most.
+		if crate::beside::beside_of(&self.name).len() > 63 {
+			return Err(Invalid::BesideName(self.name.clone()));
 		}
 		Ok(())
 	}

@@ -35,9 +35,26 @@ async fn apply_resolver(host: &Host) -> Result<(), RouteError> {
 }
 
 pub fn render(host: &Host) -> Result<serde_json::Value, store::Error> {
+	render_switched(host, &caddy::Switched::new())
+}
+
+fn render_switched(
+	host: &Host,
+	switched: &caddy::Switched,
+) -> Result<serde_json::Value, store::Error> {
 	let (apps, routes) = (host.store.apps()?, host.store.routes()?);
 	let lan = host.config.resolver.address.is_some();
-	Ok(caddy::render(&host.config.caddy, &apps, &routes, lan))
+	Ok(caddy::render_switched(&host.config.caddy, &apps, &routes, lan, switched))
+}
+
+/// Render Caddy with the apps `switched` names dialed at their address, and apply it: the moment a
+/// version beside its predecessor takes the route. Caddy's reload finishes what the old
+/// configuration was answering. See spec/architecture/host.md, "An app chooses how it is rolled
+/// out, and keeping nothing earns a gapless one".
+pub(super) async fn switch(host: &Host, switched: &caddy::Switched) -> Result<(), RouteError> {
+	let rendered = render_switched(host, switched)?;
+	caddy::apply(&host.config.caddy, &rendered).await?;
+	Ok(())
 }
 
 /// Attach Caddy and host to every app's network again. A Caddy container that was recreated

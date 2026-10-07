@@ -25,8 +25,8 @@ use bollard::Docker;
 use bollard::models::{EndpointSettings, NetworkConnectRequest, NetworkCreateRequest};
 use bollard::query_parameters::{
 	CreateContainerOptionsBuilder, ImportImageOptionsBuilder, ListImagesOptionsBuilder,
-	RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RestartContainerOptionsBuilder,
-	StopContainerOptionsBuilder, TagImageOptionsBuilder,
+	RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RenameContainerOptionsBuilder,
+	RestartContainerOptionsBuilder, StopContainerOptionsBuilder, TagImageOptionsBuilder,
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 const REPOSITORY: &str = "host";
 
 /// Memory a container gets when its declaration names none.
-pub(crate) const DEFAULT_MEMORY_MB: u32 = 512;
+pub const DEFAULT_MEMORY_MB: u32 = 512;
 
 /// The label every container carries its own version in, so what runs can be read back from
 /// Docker by a program that keeps no state of its own.
@@ -261,6 +261,14 @@ impl Engine {
 		}
 	}
 
+	/// Give the container `from` the name `to`, running as it is: Docker's DNS answers by the new
+	/// name from then on, and an address it already has stays.
+	pub async fn rename(&self, from: &str, to: &str) -> Result<(), Error> {
+		let options = RenameContainerOptionsBuilder::new().name(to).build();
+		self.docker.rename_container(from, options).await?;
+		Ok(())
+	}
+
 	/// Create and start a sidecar in place of whatever ran under its name. Its network is the app's,
 	/// which has to exist already.
 	pub async fn run_sidecar(&self, sidecar: &Sidecar) -> Result<(), Error> {
@@ -282,6 +290,18 @@ impl Engine {
 		let options = StopContainerOptionsBuilder::new().t(20).build();
 		self.docker.stop_container(name, Some(options)).await?;
 		Ok(())
+	}
+
+	/// Stop it with `grace` between SIGTERM and the kill, where it is there and running.
+	pub async fn stop_within(&self, name: &str, grace: std::time::Duration) -> Result<(), Error> {
+		let seconds = i32::try_from(grace.as_secs()).unwrap_or(i32::MAX);
+		let options = StopContainerOptionsBuilder::new().t(seconds).build();
+		match self.docker.stop_container(name, Some(options)).await {
+			// 304: already stopped.
+			Err(bollard::errors::Error::DockerResponseServerError { status_code: 304, .. }) => Ok(()),
+			Err(error) if absent(&error) => Ok(()),
+			done => Ok(done?),
+		}
 	}
 
 	pub async fn restart(&self, name: &str) -> Result<(), Error> {

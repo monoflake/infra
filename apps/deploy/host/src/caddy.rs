@@ -7,8 +7,10 @@
 
 use crate::config::CaddyConfig;
 use crate::store::{Deployed, Route};
-use deploy::manifest::Limit;
+use deploy::manifest::{Limit, Rollout};
 use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +28,35 @@ struct Target {
 	name: String,
 	dial: String,
 	home: Option<String>,
+	/// An app rolled out beside its predecessor; see `lingering`.
+	beside: bool,
+}
+
+/// Apps Caddy dials at an address rather than by name: each whose new version runs beside the old
+/// under a name of its own, until it takes the app's. An address outlasts the rename, so no
+/// request finds the name between the two. See spec/architecture/host.md, "An app chooses how it is
+/// rolled out, and keeping nothing earns a gapless one".
+pub type Switched = HashMap<String, IpAddr>;
+
+/// Where Caddy dials `app` at `port`: its address while it is switched, its name otherwise.
+fn dial(app: &Deployed, port: u16, switched: &Switched) -> String {
+	match switched.get(&app.manifest.name) {
+		Some(address) => SocketAddr::new(*address, port).to_string(),
+		None => format!("{}:{port}", app.manifest.name),
+	}
+}
+
+/// A proxy to an app rolled out beside its predecessor keeps a socket open across the reload that
+/// switches it, for as long as the version before is given to finish.
+fn lingering(mut proxy: Value, beside: bool) -> Value {
+	if beside {
+		proxy["stream_close_delay"] = json!(format!("{}s", deploy::beside::GRACE.as_secs()));
+	}
+	proxy
+}
+
+fn beside(app: &Deployed) -> bool {
+	app.manifest.rollout == Rollout::Beside
 }
 
 /// `host:port` is dialed as plain HTTP. `https://host[:port]` is a LAN device that speaks only TLS
@@ -67,7 +98,8 @@ fn named(host: String, target: &Target) -> Value {
 			"handle": [{ "handler": "static_response", "status_code": 307, "headers": { "Location": [home] } }]
 		}));
 	}
-	routes.push(json!({ "handle": [encode(), proxy(&target.dial, &host)] }));
+	let proxied = lingering(proxy(&target.dial, &host), target.beside);
+	routes.push(json!({ "handle": [encode(), proxied] }));
 	json!({ "match": [{ "host": [host] }], "handle": [{ "handler": "subroute", "routes": routes }] })
 }
 
@@ -185,16 +217,17 @@ const INTERNAL_HEADER: &str = "X-Internal";
 /// public may reach of it is the gateway's table, not this render. Limits are only ever counted on
 /// the tunnel's side, over what the gateway forwards. See platform's spec/architecture/services.md,
 /// "A path with no scope is a 400, on both gateways".
-fn scopes(apps: &[Deployed], side: Side) -> Vec<Value> {
+fn scopes(apps: &[Deployed], side: Side, switched: &Switched) -> Vec<Value> {
 	scopes_then(
 		apps,
 		side,
+		switched,
 		json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }),
 	)
 }
 
 /// `scopes`, with `rest` in place of the 404 for a scope not deployed here.
-fn scopes_then(apps: &[Deployed], side: Side, rest: Value) -> Vec<Value> {
+fn scopes_then(apps: &[Deployed], side: Side, switched: &Switched, rest: Value) -> Vec<Value> {
 	let mut routes = vec![json!({
 		"match": [{ "path": ["/"] }],
 		"handle": [{ "handler": "static_response", "status_code": 400 }]
@@ -205,7 +238,8 @@ fn scopes_then(apps: &[Deployed], side: Side, rest: Value) -> Vec<Value> {
 		let port = app.manifest.container.as_ref()?.port?;
 		let mut handle = vec![json!({ "handler": "rewrite", "strip_path_prefix": format!("/{name}") })];
 		handle.extend((side == Side::Tunnel).then(|| limited(name, &api.limits)).flatten());
-		handle.extend([encode(), proxy(&format!("{name}:{port}"), name)]);
+		let proxied = lingering(proxy(&dial(app, port, switched), name), beside(app));
+		handle.extend([encode(), proxied]);
 		Some(json!({
 			"match": [{ "path": [format!("/{name}"), format!("/{name}/*")] }],
 			"handle": handle
@@ -215,10 +249,10 @@ fn scopes_then(apps: &[Deployed], side: Side, rest: Value) -> Vec<Value> {
 	routes
 }
 
-fn api_host(host: String, apps: &[Deployed], side: Side) -> Value {
+fn api_host(host: String, apps: &[Deployed], side: Side, switched: &Switched) -> Value {
 	json!({
 		"match": [{ "host": [host] }],
-		"handle": [{ "handler": "subroute", "routes": scopes(apps, side) }]
+		"handle": [{ "handler": "subroute", "routes": scopes(apps, side, switched) }]
 	})
 }
 
@@ -276,7 +310,7 @@ pub fn private_api_host(config: &CaddyConfig) -> String {
 /// LAN, the tailnet or the tunnel, and a caller's own `X-Internal` is dropped. See
 /// spec/architecture/host.md, "Every node answers the private API, and sends on what is not its
 /// own".
-fn private_api(config: &CaddyConfig, apps: &[Deployed]) -> Value {
+fn private_api(config: &CaddyConfig, apps: &[Deployed], switched: &Switched) -> Value {
 	let host = private_api_host(config);
 	let tunnel = json!({
 		"match": [{ "remote_ip": { "ranges": [config.tunnel_source] } }],
@@ -286,7 +320,7 @@ fn private_api(config: &CaddyConfig, apps: &[Deployed]) -> Value {
 		"delete": [INTERNAL_HEADER, "Cf-Connecting-Ip"]
 	}}]});
 	let mut routes = vec![tunnel, refuse_unless(&config.app_sources), unclaimed];
-	routes.extend(scopes_then(apps, Side::Private, to_public_gateway(config)));
+	routes.extend(scopes_then(apps, Side::Private, switched, to_public_gateway(config)));
 	json!({
 		"match": [{ "host": [host] }],
 		"handle": [{ "handler": "subroute", "routes": routes }],
@@ -302,7 +336,7 @@ pub const DOOR: &str = "infra";
 /// write is asked over the tailnet instead. See spec/architecture/host.md, "host has no interface
 /// on the node, and a door Caddy keeps".
 const DOOR_READS: &str = concat!(
-	"^/api/(node/(now|series)|apps|apps/[^/]+|apps/[^/]+/(history|metrics/series)|events",
+	"^/api/(node/(now|series)|apps|apps/[^/]+|apps/[^/]+/(history|health|metrics/series)|events",
 	"|inspect/disk)$"
 );
 
@@ -332,7 +366,12 @@ fn door(name: String, host: &str) -> Value {
 /// Every label is on `.app`; the private suffix carries it only when the interface's `lan`, or the
 /// route's `private`, says so. See spec/architecture/host.md, "The private suffix is a mirror of
 /// part of `.app`, and nothing else".
-fn interfaces(apps: &[Deployed], routes: &[Route], public: bool) -> Vec<Target> {
+fn interfaces(
+	apps: &[Deployed],
+	routes: &[Route],
+	public: bool,
+	switched: &Switched,
+) -> Vec<Target> {
 	let mut targets = Vec::new();
 	targets.extend(
 		apps
@@ -344,8 +383,9 @@ fn interfaces(apps: &[Deployed], routes: &[Route], public: bool) -> Vec<Target> 
 				let interface = app.manifest.interface.as_ref()?;
 				Some(Target {
 					name: interface.label(&app.manifest.name).to_owned(),
-					dial: format!("{}:{}", app.manifest.name, app.manifest.container.as_ref()?.port?),
+					dial: dial(app, app.manifest.container.as_ref()?.port?, switched),
 					home: interface.home.clone(),
+					beside: beside(app),
 				})
 			}),
 	);
@@ -353,6 +393,7 @@ fn interfaces(apps: &[Deployed], routes: &[Route], public: bool) -> Vec<Target> 
 		name: route.name.clone(),
 		dial: route.upstream.clone(),
 		home: route.home.clone(),
+		beside: false,
 	}));
 	targets.retain(|target| {
 		let stale = target.name == DOOR;
@@ -370,13 +411,14 @@ fn private_side(
 	apps: &[Deployed],
 	routes: &[Route],
 	trusted: &Value,
+	switched: &Switched,
 ) -> (Value, Value) {
 	let private = &config.private_suffix;
 
 	let mut inside = vec![refuse_unless(&config.private_sources)];
-	inside.push(api_host(format!("api.{private}"), apps, Side::Private));
+	inside.push(api_host(format!("api.{private}"), apps, Side::Private, switched));
 	inside.push(door(format!("{DOOR}.{private}"), &config.host));
-	for target in interfaces(apps, routes, false) {
+	for target in interfaces(apps, routes, false, switched) {
 		inside.push(named(format!("{}.{private}", target.name), &target));
 	}
 	inside.push(abort());
@@ -411,20 +453,32 @@ fn private_side(
 /// `lan` is whether the node has one; without it there is no LAN side and no certificate, and the
 /// node's containers still ask the private API host on port 80. See spec/architecture/host.md,
 /// "Caddy is deployed like any app, and is the one door".
+#[cfg(test)]
 pub fn render(config: &CaddyConfig, apps: &[Deployed], routes: &[Route], lan: bool) -> Value {
+	render_switched(config, apps, routes, lan, &Switched::new())
+}
+
+/// `render`, with the apps `switched` names dialed at their address.
+pub fn render_switched(
+	config: &CaddyConfig,
+	apps: &[Deployed],
+	routes: &[Route],
+	lan: bool,
+	switched: &Switched,
+) -> Value {
 	let public = &config.public_suffix;
 
 	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
-	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel));
+	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel, switched));
 	outside.push(door(format!("{DOOR}.{public}"), &config.host));
-	for target in interfaces(apps, routes, true) {
+	for target in interfaces(apps, routes, true, switched) {
 		outside.push(named(format!("{}.{public}", target.name), &target));
 	}
 	outside.push(json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }));
 
 	// The visitor's address comes from Cloudflare's header, and only when cloudflared sent it.
 	let trusted = json!({ "source": "static", "ranges": [config.tunnel_source] });
-	let private = lan.then(|| private_side(config, apps, routes, &trusted));
+	let private = lan.then(|| private_side(config, apps, routes, &trusted, switched));
 
 	let mut servers = serde_json::Map::new();
 	if let Some((server, _)) = &private {
@@ -434,7 +488,7 @@ pub fn render(config: &CaddyConfig, apps: &[Deployed], routes: &[Route], lan: bo
 		"tunnel".into(),
 		json!({
 			"listen": [":80"],
-			"routes": [private_api(config, apps), {
+			"routes": [private_api(config, apps, switched), {
 				"match": [{ "host": [format!("*.{public}")] }],
 				"handle": [{ "handler": "subroute", "routes": outside }],
 				"terminal": true
@@ -535,6 +589,27 @@ mod tests {
 		assert!(!rendered.contains("geo.inside.test"));
 		// The LAN's side, the tunnel's, and the private API host the node's containers ask.
 		assert_eq!(rendered.matches(r#""dial":"geo:23440""#).count(), 3);
+	}
+
+	#[test]
+	fn a_switched_app_is_dialed_at_its_address_and_a_beside_one_keeps_its_streams() {
+		let mut beside = geo();
+		beside.manifest.rollout = deploy::manifest::Rollout::Beside;
+		beside.manifest.interface =
+			Some(deploy::manifest::Interface { domain: None, lan: true, home: None });
+		let switched = super::Switched::from([("geo".to_owned(), [172, 18, 0, 7].into())]);
+		let apps = [beside];
+		let rendered = text(&super::render_switched(&config(), &apps, &[], true, &switched));
+		// Both API hosts, the private one the node's containers ask, and the label on both sides.
+		assert_eq!(rendered.matches(r#""dial":"172.18.0.7:23440""#).count(), 5);
+		assert!(!rendered.contains(r#""dial":"geo:23440""#));
+		assert_eq!(rendered.matches(r#""stream_close_delay":"30s""#).count(), 5);
+		// Unswitched, it is dialed by its name again, and still keeps its streams.
+		let named = text(&render(&config(), &apps, &[], true));
+		assert_eq!(named.matches(r#""dial":"geo:23440""#).count(), 5);
+		assert_eq!(named.matches(r#""stream_close_delay":"30s""#).count(), 5);
+		// An app replaced in place renders as it always did.
+		assert!(!text(&render(&config(), &[geo()], &[], true)).contains("stream_close_delay"));
 	}
 
 	#[test]
@@ -664,7 +739,7 @@ mod tests {
 
 	#[test]
 	fn a_path_with_no_scope_is_malformed() {
-		let first = &scopes(&[geo()], Side::Private)[0];
+		let first = &scopes(&[geo()], Side::Private, &super::Switched::new())[0];
 		assert_eq!(first["match"][0]["path"][0], "/");
 		assert_eq!(first["handle"][0]["status_code"], 400);
 	}
@@ -841,6 +916,7 @@ mod tests {
 			"/api/apps",
 			"/api/apps/geo",
 			"/api/apps/geo/history",
+			"/api/apps/geo/health",
 			"/api/apps/geo/metrics/series",
 			"/api/events",
 			"/api/inspect/disk",
@@ -931,7 +1007,7 @@ mod tests {
 			r#""prefer":["zstd","gzip"]},{"handler":"reverse_proxy","#,
 			r#""upstreams":[{"dial":"host.app-host:11011"}]}],"match":[{"method":["GET"],"#,
 			r#""path_regexp":{"pattern":"^/api/(node/(now|series)|apps|apps/[^/]+|"#,
-			r#"apps/[^/]+/(history|metrics/series)|events|inspect/disk)$"}}]},"#,
+			r#"apps/[^/]+/(history|health|metrics/series)|events|inspect/disk)$"}}]},"#,
 			r#"{"handle":[{"handler":"static_response","status_code":404}]}]}],"#,
 			r#""match":[{"host":["infra.inside.test"]}]},"#,
 			r#"{"handle":[{"handler":"subroute","#,

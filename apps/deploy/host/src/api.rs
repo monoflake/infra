@@ -16,7 +16,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use deploy::Manifest;
-use deploy::manifest::{self, is_home};
+use deploy::manifest::{self, Rollout, is_home};
 use deploy::replace::Error as Failed;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -26,6 +26,7 @@ pub fn router(host: Arc<Host>) -> Router {
 		.route("/apps", get(apps))
 		.route("/apps/{name}", get(app).post(upload).delete(remove).layer(DefaultBodyLimit::disable()))
 		.route("/apps/{name}/history", get(history))
+		.route("/apps/{name}/health", get(app_health))
 		.route("/events", get(events))
 		.route("/apps/{name}/redeploy", post(redeploy))
 		.route("/apps/{name}/rollback", post(rollback))
@@ -92,6 +93,10 @@ struct Notice {
 	/// under the name a keeper built before the rename sends.
 	#[serde(default, alias = "host_done")]
 	host_replaced: bool,
+	/// The one app of the run to deploy, sent by the operator: an app rolled out by hand is deployed
+	/// this way and no other. See rollout/run.rs.
+	#[serde(default)]
+	app: Option<String>,
 }
 
 /// A CI run has finished. Open, since it can only ask host to look: the run is checked against
@@ -105,16 +110,23 @@ async fn notice(State(host): State<Arc<Host>>, Json(notice): Json<Notice>) -> Re
 	let Some(repository) = repository else {
 		return response::failure(StatusCode::BAD_REQUEST, "invalid_repository");
 	};
-	let key = (repository.clone(), notice.run);
+	if let Some(app) = notice.app.as_deref()
+		&& let Err(error) = rollout::deployable(app)
+	{
+		return failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_name", error);
+	}
+	let key = (repository.clone(), notice.run, notice.app.clone());
 	let fresh =
 		host.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.clone());
-	let answer = serde_json::json!({ "run": notice.run, "repository": repository });
+	let answer =
+		serde_json::json!({ "run": notice.run, "repository": repository, "app": notice.app });
 	if !fresh {
 		return response::success(StatusCode::OK, answer);
 	}
 	let taker = host.clone();
 	tokio::spawn(async move {
-		if !rollout::from_run(taker.clone(), &repository, notice.run, notice.host_replaced).await {
+		let (run, replaced, only) = (notice.run, notice.host_replaced, notice.app.as_deref());
+		if !rollout::from_run(taker.clone(), &repository, run, replaced, only).await {
 			let mut notices = taker.notices.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 			notices.remove(&key);
 		}
@@ -205,6 +217,8 @@ struct Shown {
 	platform: bool,
 	/// A driver, which has no container of its own for the panel to act on.
 	driver: bool,
+	/// How a new version takes its place, `replace` when its declaration says nothing.
+	rollout: Rollout,
 }
 
 async fn shown(host: &Host, app: Deployed) -> Shown {
@@ -212,7 +226,8 @@ async fn shown(host: &Host, app: Deployed) -> Shown {
 	let restorable = rollout::restorable(host, &app).ok().flatten().is_some();
 	let platform = rollout::PLATFORM.contains(&app.manifest.name.as_str());
 	let driver = host.config.grants.driver_of(&app.manifest).is_some();
-	Shown { app, running, restorable, platform, driver }
+	let rollout = app.manifest.rollout;
+	Shown { app, running, restorable, platform, driver, rollout }
 }
 
 /// Every app the store holds, and host itself among them, read from its container.
@@ -246,6 +261,68 @@ async fn app(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Respons
 		Ok(None) => response::failure(StatusCode::NOT_FOUND, "no_such_app"),
 		Err(error) => failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error),
 	}
+}
+
+/// How long an app has to answer when its health is asked from the console.
+const HEALTH_WITHIN: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What an app answered its own health path with, asked the moment the console asked.
+#[derive(Debug, serde::Serialize)]
+struct Health {
+	app: String,
+	/// Whether it answered at all, with any status.
+	answered: bool,
+	code: Option<u16>,
+	/// Its answer as JSON, or null when it was not JSON or there was none.
+	body: Option<serde_json::Value>,
+	checked_at: String,
+	/// Why there was no answer.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	error: Option<String>,
+}
+
+/// Ask `app` at `asked` for `path`, once.
+async fn ask_health(app: &str, asked: Option<deploy::replace::Asked>, path: &str) -> Health {
+	let answer = match asked {
+		Some(asked) => asked.get(path, HEALTH_WITHIN).await.map_err(|error| error.to_string()),
+		None => Err("it runs no container of its own to ask".to_owned()),
+	};
+	let checked_at = jiff::Timestamp::now().to_string();
+	match answer {
+		Ok((code, body)) => Health {
+			app: app.to_owned(),
+			answered: true,
+			code: Some(code),
+			body: serde_json::from_str(&body).ok(),
+			checked_at,
+			error: None,
+		},
+		Err(error) => Health {
+			app: app.to_owned(),
+			answered: false,
+			code: None,
+			body: None,
+			checked_at,
+			error: Some(error),
+		},
+	}
+}
+
+/// The app's health now, asked exactly as its deploy's check asks it: on its own network or its
+/// socket. Whatever it answers, the answer is a success; that it did not answer is in the data.
+async fn app_health(State(host): State<Arc<Host>>, Path(name): Path<String>) -> Response {
+	let deployed = match name.as_str() {
+		"host" => rollout::itself(&host).await.map_err(|error| error.to_string()),
+		_ => host.store.app(&name).map_err(|error| error.to_string()),
+	};
+	let manifest = match deployed {
+		Ok(Some(app)) => app.manifest,
+		Ok(None) => return response::failure(StatusCode::NOT_FOUND, "no_such_app"),
+		Err(error) => return failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error),
+	};
+	let path = manifest.container.as_ref().map_or("/health", |container| &container.health);
+	let health = ask_health(&name, rollout::asked(&host, &manifest), path).await;
+	response::success(StatusCode::OK, health)
 }
 
 #[derive(Deserialize)]
@@ -287,9 +364,9 @@ fn refused(error: DeployError) -> Response {
 		DeployError::NoSuchApp(_) => (StatusCode::NOT_FOUND, "no_such_app"),
 		DeployError::NoPrevious(_) => (StatusCode::CONFLICT, "no_such_version"),
 		DeployError::NoSnapshot(_) => (StatusCode::CONFLICT, "no_such_snapshot"),
-		DeployError::Replace(Failed::Unhealthy { .. } | Failed::FirstFailed { .. }) => {
-			(StatusCode::BAD_GATEWAY, "app_unavailable")
-		}
+		DeployError::Replace(
+			Failed::Unhealthy { .. } | Failed::FirstFailed { .. } | Failed::Beside { .. },
+		) => (StatusCode::BAD_GATEWAY, "app_unavailable"),
 		DeployError::Engine(_) | DeployError::Replace(_) => {
 			(StatusCode::BAD_GATEWAY, "docker_unavailable")
 		}
@@ -411,9 +488,11 @@ async fn upload(
 		Err(error @ DeployError::Load(_)) => {
 			failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_image", error)
 		}
-		Err(error @ DeployError::Replace(Failed::Unhealthy { .. } | Failed::FirstFailed { .. })) => {
-			failed(StatusCode::BAD_GATEWAY, "app_unavailable", error)
-		}
+		Err(
+			error @ DeployError::Replace(
+				Failed::Unhealthy { .. } | Failed::FirstFailed { .. } | Failed::Beside { .. },
+			),
+		) => failed(StatusCode::BAD_GATEWAY, "app_unavailable", error),
 		Err(error) => failed(StatusCode::INTERNAL_SERVER_ERROR, "service_unavailable", error),
 	}
 }
@@ -833,6 +912,100 @@ mod tests {
 		// No number is fifty, and none is less than one.
 		assert_eq!(ids_of(&read(Page { before: None, limit: None }).await).len(), 4);
 		assert_eq!(ids_of(&read(Page { before: None, limit: Some(0) }).await), [ids[3]]);
+	}
+
+	/// The envelope `path` is answered with by a host over `root`, asked with the read token.
+	async fn read(host: std::sync::Arc<crate::Host>, path: &str) -> (u16, serde_json::Value) {
+		use http_body_util::BodyExt;
+		use tower::ServiceExt;
+		let request = axum::http::Request::get(path)
+			.header("authorization", "Bearer reader")
+			.body(axum::body::Body::empty())
+			.unwrap();
+		let answer = super::router(host).oneshot(request).await.unwrap();
+		let status = answer.status().as_u16();
+		let body = answer.into_body().collect().await.unwrap().to_bytes();
+		(status, serde_json::from_slice(&body).unwrap())
+	}
+
+	/// An app answering `/health` with `body` at a port on this machine, which is where it is asked.
+	async fn answering(body: &'static str) -> String {
+		let app = axum::Router::new().route("/health", axum::routing::get(move || async move { body }));
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap().to_string();
+		tokio::spawn(async move { axum::serve(listener, app).await });
+		address
+	}
+
+	#[tokio::test]
+	async fn an_apps_health_is_its_answer_parsed_or_why_there_was_none() {
+		use deploy::replace::Asked;
+		let address = answering(r#"{"status":"success","data":{"ok":true}}"#).await;
+		let health = super::ask_health("geo", Some(Asked::At(address)), "/health").await;
+		let json = serde_json::to_value(&health).unwrap();
+		assert_eq!(
+			(&json["app"], &json["answered"], &json["code"]),
+			(&"geo".into(), &true.into(), &200.into())
+		);
+		assert_eq!(json["body"]["data"]["ok"], true);
+		assert!(json.get("error").is_none());
+		assert!(json["checked_at"].as_str().unwrap().parse::<jiff::Timestamp>().is_ok());
+
+		let plain = super::ask_health("geo", Some(Asked::At(answering("ok").await)), "/health").await;
+		let json = serde_json::to_value(&plain).unwrap();
+		assert_eq!((&json["answered"], &json["body"]), (&true.into(), &serde_json::Value::Null));
+
+		// A port nothing listens on any more.
+		let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let gone = closed.local_addr().unwrap().to_string();
+		drop(closed);
+		let silent = super::ask_health("geo", Some(Asked::At(gone)), "/health").await;
+		let json = serde_json::to_value(&silent).unwrap();
+		assert_eq!(json["answered"], false);
+		assert_eq!(
+			(&json["code"], &json["body"]),
+			(&serde_json::Value::Null, &serde_json::Value::Null)
+		);
+		assert!(json["error"].as_str().is_some_and(|error| !error.is_empty()));
+	}
+
+	#[tokio::test]
+	async fn an_apps_health_is_read_with_the_read_token_and_a_missing_app_is_not_found() {
+		use crate::store::Deployed;
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let (status, envelope) = read(host.clone(), "/api/apps/geo/health").await;
+		assert_eq!((status, &envelope["status"]), (404, &"error".into()));
+		assert_eq!(envelope["code"], "no_such_app");
+
+		// An app on a socket in its own directory, asked there as its deploy's check asks it.
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"probe\"\nplacements = [\"rdu\"]\n[container]\n\
+			 socket = \"probe.sock\"\nhealth = \"/health\"\n[data]\npath = \"/data\"\n",
+		)
+		.unwrap();
+		let data = host.volumes.data("probe");
+		std::fs::create_dir_all(&data).unwrap();
+		let socket = tokio::net::UnixListener::bind(data.join("probe.sock")).unwrap();
+		let app = axum::Router::new()
+			.route("/health", axum::routing::get(|| async { r#"{"status":"success","data":null}"# }));
+		tokio::spawn(async move { axum::serve(socket, app).await });
+		let deployed = Deployed {
+			manifest,
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		host.store.put_app(&deployed).unwrap();
+		let (status, envelope) = read(host, "/api/apps/probe/health").await;
+		assert_eq!((status, &envelope["status"]), (200, &"success".into()));
+		let data = &envelope["data"];
+		assert_eq!(
+			(&data["app"], &data["answered"], &data["code"]),
+			(&"probe".into(), &true.into(), &200.into())
+		);
+		assert_eq!(data["body"]["status"], "success");
 	}
 
 	#[test]

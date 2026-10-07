@@ -466,3 +466,72 @@ fn a_scheduled_service_answers_through_its_scope_or_its_socket() {
 	.unwrap();
 	assert_eq!(unreachable.check("probe", "rdu"), Err(Invalid::Unscheduled("probe".into())));
 }
+
+/// geo's declaration with `rollout` set to `rollout`, and `extra` after it.
+fn rolled(rollout: &str, extra: &str) -> Manifest {
+	let declared = GEO.replacen("version = 1", &format!("version = 1\nrollout = \"{rollout}\""), 1);
+	Manifest::parse(&format!("{declared}\n{extra}\n")).unwrap()
+}
+
+#[test]
+fn a_rollout_is_replace_unless_it_says_otherwise_and_left_out_when_it_is() {
+	let geo = Manifest::parse(GEO).unwrap();
+	assert_eq!(geo.rollout, Rollout::Replace);
+	let written: toml::Table = toml::to_string(&geo).unwrap().parse().unwrap();
+	assert!(!written.contains_key("rollout"));
+	assert_eq!(rolled("replace", "").rollout, Rollout::Replace);
+	for (word, rollout) in [("beside", Rollout::Beside), ("manual", Rollout::Manual)] {
+		let manifest = rolled(word, "");
+		assert_eq!((manifest.rollout, manifest.rollout.word()), (rollout, word));
+		assert_eq!(manifest.check("geo", "rdu"), Ok(()));
+		let back = Manifest::parse(&toml::to_string(&manifest).unwrap()).unwrap();
+		assert_eq!(back.rollout, rollout);
+	}
+	assert!(matches!(
+		Manifest::parse(&GEO.replacen("version = 1", "version = 1\nrollout = \"canary\"", 1)),
+		Err(Invalid::Malformed(_))
+	));
+}
+
+#[test]
+fn beside_is_refused_to_anything_two_containers_could_not_hold_at_once() {
+	let beside = |extra: &str| rolled("beside", extra).check("geo", "rdu");
+	assert_eq!(beside("[data]\npath = \"/data\""), Err(Invalid::BesideData));
+	assert_eq!(
+		beside("[objects]\nbuckets = [\"photos\"]"),
+		Err(Invalid::BesideSidecar("objects".into()))
+	);
+	assert_eq!(beside("[postgres]"), Err(Invalid::BesideSidecar("postgres".into())));
+	for role in ["peer", "scheduler", "steward", "reporter"] {
+		let asked = format!("[shape]\nkind = \"{role}\"");
+		assert_eq!(beside(&asked), Err(Invalid::BesideRole(role.into())), "{role}");
+	}
+	let driver = beside("[driver]\nprovides = \"objects\"");
+	assert_eq!(driver, Err(Invalid::BesideRole("the objects driver".into())));
+	// Replace takes every one of them as before.
+	assert_eq!(rolled("replace", "[shape]\nkind = \"peer\"").check("geo", "rdu"), Ok(()));
+	assert_eq!(rolled("manual", "[data]\npath = \"/data\"").check("geo", "rdu"), Ok(()));
+}
+
+#[test]
+fn beside_is_refused_to_an_app_on_a_socket_and_to_infras_own() {
+	let mut socketed = rolled("beside", "[data]\npath = \"/data\"");
+	let container = socketed.container.as_mut().unwrap();
+	(container.port, container.socket) = (None, Some("geo.sock".into()));
+	socketed.api = None;
+	assert_eq!(socketed.check("geo", "rdu"), Err(Invalid::BesideSocket));
+	for own in ["caddy", "resolver", "tunnel", "keeper"] {
+		let mut manifest = rolled("beside", "");
+		manifest.name = own.into();
+		assert_eq!(manifest.check_own(own, "rdu"), Err(Invalid::BesideOwn(own.into())), "{own}");
+	}
+}
+
+#[test]
+fn beside_needs_room_in_a_name_for_the_version_beside_it() {
+	let mut long = rolled("beside", "");
+	long.name = "a".repeat(59);
+	assert_eq!(long.check(&"a".repeat(59), "rdu"), Err(Invalid::BesideName("a".repeat(59))));
+	long.name = "a".repeat(58);
+	assert_eq!(long.check(&"a".repeat(58), "rdu"), Ok(()));
+}

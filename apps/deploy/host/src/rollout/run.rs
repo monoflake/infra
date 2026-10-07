@@ -4,17 +4,21 @@
 use super::version::{archived, skip, staged};
 use crate::Host;
 use crate::store::{self, Action, Source, Stage};
-use deploy::manifest::Manifest;
+use deploy::manifest::{Manifest, Rollout};
 use std::sync::Arc;
 
-/// Deploy what a CI run built for this node, once GitHub's record of the run says it may be.
-/// host's own image is keeper's to deploy and is left to it. True when everything went, so a
-/// notice that failed on the way can be taken again when GitHub delivers it again.
-///
-/// A run that built host is keeper's first: keeper replaces host and then passes the run on with
-/// `host_replaced`, and only that notice is acted on here. Were both to act at once, each would
-/// stop the other mid-deploy. See spec/architecture/host.md, "keeper has its own intake".
-pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced: bool) -> bool {
+/// Deploy what a CI run built for this node, once GitHub's record of the run says it may be; with
+/// `only`, the operator's one app, rolled out by hand or not. host's own image is keeper's first,
+/// and acted on here only once passed back with `host_replaced`. True when everything went, so a
+/// notice that failed on the way is taken again. See spec/architecture/host.md, "keeper has its
+/// own intake", and "An app chooses how it is rolled out, and keeping nothing earns a gapless one".
+pub async fn from_run(
+	host: Arc<Host>,
+	repository: &str,
+	run: u64,
+	host_replaced: bool,
+	only: Option<&str>,
+) -> bool {
 	let Some(github) = host.github.as_ref() else {
 		eprintln!("host: run {run}: this node has no GITHUB_ACTIONS_TOKEN");
 		return false;
@@ -26,6 +30,14 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 			return false;
 		}
 	};
+	let artifacts: Vec<_> = match only {
+		Some(app) => artifacts.into_iter().filter(|artifact| artifact.app == app).collect(),
+		None => artifacts,
+	};
+	if let Some(app) = only.filter(|_| artifacts.is_empty()) {
+		eprintln!("host: run {run}: it built nothing for `{app}`");
+		return true;
+	}
 	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
 		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
 		// Not taken, so the notice keeper sends afterwards is.
@@ -71,6 +83,13 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 			let _ = tokio::fs::remove_file(&fetched.image).await;
 			continue;
 		}
+		// Rolled out by hand: the operator's notice for it alone deploys it, a node at a time.
+		if manifest.rollout == Rollout::Manual && only.is_none() {
+			skip(&host, id, &by_hand(&host.config.node, repository, run, &artifact.app));
+			let _ = tokio::fs::remove_file(&fetched.image).await;
+			eprintln!("host: run {run}: {} is rolled out by hand, so it was not deployed", artifact.app);
+			continue;
+		}
 		// Held stopped from the panel: the run is recorded, not started. See
 		// spec/architecture/host.md, "A stop holds until a start".
 		if host.store.app(&artifact.app).ok().flatten().is_some_and(|app| app.held) {
@@ -93,6 +112,13 @@ pub async fn from_run(host: Arc<Host>, repository: &str, run: u64, host_replaced
 /// Why a run's deploy was passed over for an app held stopped.
 const HELD: &str = "held stopped from the panel";
 
+/// Why a run's deploy was passed over for an app rolled out by hand, and how to deploy it.
+fn by_hand(node: &str, repository: &str, run: u64, app: &str) -> String {
+	format!(
+		"rolled out by hand: mise run node deploy {node} --run {run} --repository {repository} --app {app}"
+	)
+}
+
 /// Why a run's deploy was passed over for an app not placed on this node.
 fn unplaced(placements: &[String]) -> String {
 	match placements {
@@ -110,7 +136,16 @@ fn caddy_first<T>(mut artifacts: Vec<T>, app: impl Fn(&T) -> &str) -> Vec<T> {
 
 #[cfg(test)]
 mod tests {
-	use super::{caddy_first, unplaced};
+	use super::{by_hand, caddy_first, unplaced};
+
+	#[test]
+	fn a_deploy_passed_over_for_the_operator_says_how_they_deploy_it() {
+		assert_eq!(
+			by_hand("rdu", "monoflake/platform", 42, "database"),
+			"rolled out by hand: mise run node deploy rdu --run 42 --repository monoflake/platform \
+			 --app database"
+		);
+	}
 
 	#[test]
 	fn caddy_is_deployed_first_and_the_rest_keep_their_order() {

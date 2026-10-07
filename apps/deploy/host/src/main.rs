@@ -34,14 +34,74 @@ pub struct Host {
 	pub deploying: tokio::sync::Mutex<()>,
 	/// Absent without a GITHUB_ACTIONS_TOKEN and DEPLOY_SOURCES, and then CI's notices are refused.
 	pub github: Option<deploy::github::GitHub>,
-	/// The runs a notice has been taken for, each by its repository.
-	pub notices: std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
+	/// The runs a notice has been taken for, each by its repository, and the one app named when the
+	/// operator named one.
+	pub notices: std::sync::Mutex<std::collections::HashSet<(String, u64, Option<String>)>>,
 	/// The images as the background last found them, and what the panel asked of them.
 	pub images: images::Images,
 	/// When `cron` was last redeployed for its socket mounts, so a read-back that never settles
 	/// logs once and stops rather than redeploying it forever. See
 	/// `rollout::tell::CRON_MOUNT_REDEPLOY_COOLDOWN`.
 	pub cron_mount_redeployed_at: std::sync::Mutex<Option<std::time::Instant>>,
+}
+
+/// A host over a directory of its own, reaching no node: the state, the apps' directories and the
+/// configuration are there, and Docker is never asked.
+#[cfg(test)]
+pub(crate) fn testing(root: &std::path::Path) -> Arc<Host> {
+	use std::path::PathBuf;
+	let apps_root = root.join("apps");
+	let config = config::Config {
+		node: "rdu".into(),
+		slot: 0,
+		token: "full".into(),
+		read_token: Some("reader".into()),
+		listen: ([127, 0, 0, 1], config::PORT).into(),
+		own_container: "host".into(),
+		snapshots_root: root.join("snapshots"),
+		logs_root: root.join("logs"),
+		state: root.join("state"),
+		incoming: root.join("incoming"),
+		platform_env: root.join(".env"),
+		caddy: config::CaddyConfig {
+			container: "caddy".into(),
+			host: deploy::engine::on_own_network("host", config::PORT),
+			admin_socket: root.join("caddy/admin.sock"),
+			config_file: root.join("caddy/caddy.json"),
+			admin_listen: "unix//data/admin.sock".into(),
+			private_suffix: "inside.test".into(),
+			public_suffix: "outside.test".into(),
+			private_sources: vec![],
+			tunnel_source: "172.30.0.20".into(),
+			acme_email: "a@example.test".into(),
+			dns_resolver: "1.1.1.1".into(),
+			public_api: "api.public.test".into(),
+			app_sources: vec![],
+			private_scopes: vec![],
+		},
+		resolver: config::ResolverConfig {
+			file: PathBuf::from("/nowhere/Corefile"),
+			address: None,
+			upstreams: vec![],
+		},
+		grants: grants::Grants::default(),
+		apps_root: apps_root.clone(),
+	};
+	Arc::new(Host {
+		store: store::Store::open(&config.state).unwrap(),
+		engine: deploy::Engine::connect().unwrap(),
+		volumes: deploy::Volumes::new(
+			apps_root,
+			config.snapshots_root.clone(),
+			config.logs_root.clone(),
+		),
+		deploying: tokio::sync::Mutex::new(()),
+		github: None,
+		notices: std::sync::Mutex::default(),
+		images: images::Images::default(),
+		cron_mount_redeployed_at: std::sync::Mutex::new(None),
+		config,
+	})
 }
 
 #[tokio::main]

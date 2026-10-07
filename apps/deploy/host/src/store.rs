@@ -93,8 +93,15 @@ pub enum Stage {
 	Admitting,
 	/// Loading the archive into Docker.
 	Loading,
-	/// Replacing what runs, through the new version's health check.
+	/// Replacing what runs, through the new version's health check; for an app rolled out beside
+	/// its predecessor, starting the new version under its own name.
 	Starting,
+	/// Beside: the new version answering its health check, the running one untouched.
+	Checking,
+	/// Beside: Caddy's route moving to the new version.
+	Switching,
+	/// Beside: the version before finishing what it answers, then removed.
+	Draining,
 }
 
 /// What started an event: a CI run, an upload, or the panel.
@@ -484,6 +491,14 @@ impl Store {
 		Ok(())
 	}
 
+	/// Say something of an open event that its close keeps unless it fails: a deploy that went
+	/// another way than its app asked.
+	pub fn note(&self, id: i64, detail: &str) -> Result<(), Error> {
+		lock(&self.history)
+			.execute("UPDATE events SET detail = ?2 WHERE id = ?1", params![id, detail])?;
+		Ok(())
+	}
+
 	/// Close every event still running, which nothing is left to finish once host has restarted,
 	/// answering how many there were.
 	pub fn sweep(&self) -> Result<usize, Error> {
@@ -494,7 +509,7 @@ impl Store {
 		Ok(closed)
 	}
 
-	/// Close an event with how it ended.
+	/// Close an event with how it ended. Without a `detail` of its own it keeps what `note` said.
 	pub fn finish(
 		&self,
 		id: i64,
@@ -503,8 +518,8 @@ impl Store {
 		detail: Option<&str>,
 	) -> Result<(), Error> {
 		lock(&self.history).execute(
-			"UPDATE events SET outcome = ?2, snapshot = COALESCE(?3, snapshot), detail = ?4,
-			finished_at = ?5 WHERE id = ?1",
+			"UPDATE events SET outcome = ?2, snapshot = COALESCE(?3, snapshot),
+			detail = COALESCE(?4, detail), finished_at = ?5 WHERE id = ?1",
 			params![id, text(&outcome)?, snapshot, detail, now()],
 		)?;
 		Ok(())
@@ -849,6 +864,30 @@ mod history {
 		assert_eq!((event.stage, event.image.as_deref()), (Some(Stage::Starting), Some("sha256:b")));
 		let json = serde_json::to_value(&event).unwrap();
 		assert_eq!((&json["stage"], &json["source"]["run"]), (&"starting".into(), &7.into()));
+	}
+
+	#[test]
+	fn a_note_is_kept_by_a_success_and_replaced_by_a_failure() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let (panel, starting) = (Source::panel(), Some(Stage::Starting));
+		let open = || store.record("geo", Action::Deploy, &panel, None, Outcome::Running, starting);
+		let (kept, replaced) = (open().unwrap(), open().unwrap());
+		for (id, stage) in [(kept, Stage::Checking), (replaced, Stage::Switching)] {
+			store.note(id, "replaced: 300 MiB available").unwrap();
+			store.advance(id, stage, None).unwrap();
+		}
+		store.finish(kept, Outcome::Succeeded, None, None).unwrap();
+		store.finish(replaced, Outcome::Failed, None, Some("not healthy")).unwrap();
+		let [failed, succeeded] = store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!(succeeded.detail.as_deref(), Some("replaced: 300 MiB available"));
+		assert_eq!(succeeded.stage, Some(Stage::Checking));
+		assert_eq!(
+			(failed.detail.as_deref(), failed.stage),
+			(Some("not healthy"), Some(Stage::Switching))
+		);
+		let json = serde_json::to_value(&failed).unwrap();
+		assert_eq!(json["stage"], "switching");
 	}
 
 	#[test]
