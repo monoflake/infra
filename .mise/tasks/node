@@ -183,9 +183,10 @@ GRANTS = {
 	"debian": ("relay:peer", "cron:scheduler", "apt:steward"),
 	"alpine": ("relay:peer", "cron:scheduler", "apk:steward"),
 }
-# What a core node grants besides: the platform's Postgres, a peer publishing 5432. See platform's
-# spec/architecture/databases.md, "Where it runs, and which one writes".
-CORE_GRANTS = ("database:peer",)
+# What a core node grants besides: the platform's Postgres, a peer publishing 5432, and the objects
+# driver, whose sidecars the platform's apps there run. See platform's
+# spec/architecture/databases.md, "Where it runs, and which one writes", and objects.md.
+CORE_GRANTS = ("database:peer", "objects:objects")
 # The private scopes host's Caddy sends to the gateway; see spec/architecture/host.md.
 PRIVATE_SCOPES = "ledger"
 # The secrets every node shares, in secrets.json under these names.
@@ -502,6 +503,11 @@ def script(name, node, proxies):
 		"""/etc/hosts > /etc/hosts.node && cat /etc/hosts.node > /etc/hosts && rm /etc/hosts.node"""
 	)
 	lines.append('tailscale set --hostname="$name"')
+	# The canary's Caddy admits its verdict route from the tailnet alone, so what tailscale forwards
+	# into Docker keeps its 100.x source rather than being masqueraded to the bridge's gateway. The
+	# canary advertises no routes; no other node is changed, since its peers may rely on today's.
+	if node.get("canary") is True:
+		lines.append("tailscale set --snat-subnet-routes=false")
 	lines.append("nft -c -f /etc/node/firewall.nft")
 	# Applied under a guard: unless a second session proves the machine is still reachable, the
 	# table comes down by itself. See spec/architecture/nodes.md.

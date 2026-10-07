@@ -381,7 +381,11 @@ and one broken node instead of seven is still the gain.
   `built` naming which of the three the run built, with the read token, sent to nrt's tailnet
   address on port 80 as `canary.<private suffix>`. Only the canary's Caddy renders that name, and
   passes on that one path, a GET, from `100.64.0.0/10`; anything else asked of it is a 404, and no
-  other node's Caddy changes. Only the canary's host answers the route.
+  other node's Caddy changes. Only the canary's host answers the route. tailscale masquerades what
+  it forwards from the tailnet into a container unless told not to, which would show Caddy the
+  edge network's gateway rather than the asking node, so the canary's setup runs `tailscale set
+  --snat-subnet-routes=false`; nrt advertises no routes, so nothing else changes, and no other
+  node is touched, its peers' database and relay seeing sources as they do today.
 - **The verdict is `passed`, `pending` or `failed`.** It is `failed` when nrt failed or passed over
   one of the apps for that run, and `pending` while one is not yet taken, still deploying, or not
   answering its health. It is `passed` once each is deployed by that run and keeper and Caddy
