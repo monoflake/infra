@@ -47,3 +47,12 @@ explicit rollback stays allowed past it, are undecided.
 VPC reaches both anyway, so nothing is broken, but two nodes made by one task differ. Whether the
 task should write rdu's shape everywhere, or rdu's is a leftover from before VPC to be trimmed, is
 undecided.
+
+## A changed `.env` reaches host only when host is replaced
+
+`mise run node` rewrites host's `.env` -- a slot, a grant -- and says host needs recreating, but
+only keeper replaces host, and only for a run that built it. On 2026-10-07 every node's host was
+made to read its new `.env` by sending each the last infra run again by hand, which keeper took as a
+replacement of host by the same image. Whether the node task asks keeper for that itself, keeper
+gains a route that replaces host by the image it already runs, or host reads its grants from a file
+it watches, is undecided.
