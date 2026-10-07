@@ -49,7 +49,7 @@ pub enum Shape {
 	Reporter { env: Vec<String>, meter: PathBuf },
 	/// The resolver only: sandboxed on its own network, DNS published on the node's LAN `address`
 	/// alone, and its configuration, which host writes, read-only. See spec/architecture/host.md,
-	/// "The resolver answers the gateway's names, and passes the rest on".
+	/// "The resolver serves the house, and answers nothing of its own".
 	Resolver { env: Vec<String>, address: String },
 	/// The peer, the platform's relay: sandboxed like any app, its declared port published on the
 	/// machine at the same number, and joined to host's own network by host. See

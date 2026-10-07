@@ -2,8 +2,8 @@
 //! spec/architecture/host.md, "What a deployment may ask for is host's decision".
 
 use super::{
-	Api, Edge, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED, RESERVED_LABELS,
-	SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every, is_home, is_hostname,
+	Api, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED, RESERVED_LABELS, SHAPES,
+	SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every, is_home,
 };
 use crate::sidecar::Driver;
 
@@ -45,7 +45,7 @@ pub enum Invalid {
 		"a limit names HTTP methods and a path from /, and allows at least once in 1 to 86400 seconds"
 	)]
 	Limit,
-	#[error("an API's sides are named from `private`, `tunnel` and `inside`, and include `inside`")]
+	#[error("an API's sides are one or both of `private` and `tunnel`")]
 	Sides,
 	#[error("`{0}` is not a bucket name S3 takes")]
 	Bucket(String),
@@ -66,8 +66,6 @@ pub enum Invalid {
 	Shape(String),
 	#[error("`[driver]` provides `{0}`, and a driver is one of objects and postgres")]
 	Driver(String),
-	#[error("`[edge]` names `{0}`, which is not a hostname, or a wildcard over one")]
-	Edge(String),
 }
 
 impl Manifest {
@@ -177,8 +175,7 @@ impl Manifest {
 			return Err(Invalid::Limit);
 		}
 		let sided = |sides: &Vec<String>| {
-			sides.iter().all(|side| SIDES.contains(&side.as_str()))
-				&& sides.iter().any(|side| side == "inside")
+			!sides.is_empty() && sides.iter().all(|side| SIDES.contains(&side.as_str()))
 		};
 		if self.api.as_ref().and_then(|api| api.sides.as_ref()).is_some_and(|sides| !sided(sides)) {
 			return Err(Invalid::Sides);
@@ -201,9 +198,6 @@ impl Manifest {
 		let provides = self.driver.as_ref().map(|driver| driver.provides.as_str());
 		if let Some(provides) = provides.filter(|provides| Driver::named(provides).is_none()) {
 			return Err(Invalid::Driver(provides.to_owned()));
-		}
-		if let Some(edge) = &self.edge {
-			check_edge(edge)?;
 		}
 		if !self.schedules.is_empty() {
 			if let Some(bad) = self.schedules.iter().find(|schedule| !sound_schedule(schedule)) {
@@ -237,27 +231,6 @@ fn check_objects(objects: &Objects) -> Result<(), Invalid> {
 	let distinct: std::collections::HashSet<&String> = objects.buckets.iter().collect();
 	if objects.buckets.is_empty() || distinct.len() != objects.buckets.len() {
 		return Err(Invalid::Buckets);
-	}
-	Ok(())
-}
-
-/// Every name an edge claims a hostname, a host perhaps a wildcard over one, and a deployment's
-/// regions and providers labels.
-fn check_edge(edge: &Edge) -> Result<(), Invalid> {
-	let host = |host: &str| is_hostname(host.strip_prefix("*.").unwrap_or(host));
-	let bad = edge.hosts.iter().find(|name| !host(name));
-	let bad = bad.or_else(|| edge.names.iter().find(|name| !is_hostname(name)));
-	if let Some(bad) = bad {
-		return Err(Invalid::Edge(bad.clone()));
-	}
-	if let Some(deployments) = &edge.deployments {
-		let labels = deployments.regions.iter().chain(&deployments.providers);
-		if let Some(bad) = labels.clone().find(|label| !is_label(label)) {
-			return Err(Invalid::Edge(bad.clone()));
-		}
-		if !is_hostname(&deployments.zone) {
-			return Err(Invalid::Edge(deployments.zone.clone()));
-		}
 	}
 	Ok(())
 }

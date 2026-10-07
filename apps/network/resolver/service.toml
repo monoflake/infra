@@ -1,6 +1,6 @@
-# The house's DNS, one of the platform's own: the gateway's names answered with the node, the rest
-# passed down a chain that skips what fails. See spec/architecture/host.md, "The resolver answers
-# the gateway's names, and passes the rest on".
+# The house's DNS, one of the platform's own: every name passed down a chain that skips what fails,
+# none answered with the node. See spec/architecture/host.md, "The resolver serves the house, and
+# answers nothing of its own".
 version = 1
 name = "resolver"
 placements = ["rdu"]

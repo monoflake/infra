@@ -80,34 +80,6 @@ pub struct Manifest {
 	/// The driver it is, run by host beside every app declaring one, when the node grants it.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub driver: Option<DriverRequest>,
-	/// The hostnames it claims at home, which Caddy routes to it and the resolver answers with the
-	/// node, where the node grants it `hosts`.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub edge: Option<Edge>,
-}
-
-/// Hostnames claimed: what Caddy matches and certifies, a name or a wildcard over one zone; the
-/// names the resolver answers exactly; and a zone whose names are spelled from regions and
-/// providers, as a deployment's are.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Edge {
-	pub hosts: Vec<String>,
-	#[serde(default)]
-	pub names: Vec<String>,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub deployments: Option<Deployments>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Deployments {
-	pub zone: String,
-	pub regions: Vec<String>,
-	pub providers: Vec<String>,
-}
-
-/// Whether `name` is a hostname of at least two labels, each one a label this format takes.
-pub fn is_hostname(name: &str) -> bool {
-	name.split('.').count() >= 2 && name.split('.').all(check::is_label)
 }
 
 /// A role asked for, one of [`SHAPES`].
@@ -176,14 +148,15 @@ pub struct Api {
 	/// platform's spec/architecture/quota.md.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub limits: Vec<Limit>,
-	/// Which of Caddy's sides carry it, of [`SIDES`]; all of them when absent, and never without
-	/// `inside`. See spec/architecture/host.md, "The inside side answers the internal gateway alone".
+	/// Which of Caddy's sides carry it, of [`SIDES`]; both when absent. See
+	/// spec/architecture/host.md, "Every node answers the private API, and sends on what is not its
+	/// own".
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub sides: Option<Vec<String>>,
 }
 
-/// Caddy's sides an API may be carried on: the LAN's, the tunnel's, and the internal gateway's.
-pub const SIDES: [&str; 3] = ["private", "tunnel", "inside"];
+/// Caddy's sides an API may be carried on: the private one, and the tunnel's.
+pub const SIDES: [&str; 2] = ["private", "tunnel"];
 
 impl Api {
 	/// Whether Caddy carries it on `side`.

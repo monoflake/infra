@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # The house's DNS: CoreDNS as upstream builds it, at a pinned version, with only what the node needs
 # said on top. host renders the Corefile it reads. See spec/architecture/host.md, "The resolver
-# answers the gateway's names, and passes the rest on".
+# serves the house, and answers nothing of its own".
 FROM coredns/coredns:1.14.7 AS upstream
 
 # Upstream's binary carries a file capability to bind 53, which a container with every capability

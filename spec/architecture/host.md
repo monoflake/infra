@@ -151,7 +151,7 @@ host's own network to read its node's host with the read token; the driver of a 
 every sidecar of that kind runs; and a claim on hostnames, which Caddy routes and the resolver
 answers. An app asks in its `service.toml` --
 `[shape] kind = "scheduler"`, `[driver] provides = "objects"` -- and the node's `.env` grants, in
-`GRANTS`, as `app:role` pairs: `cron:scheduler objects:objects gateway:hosts`.
+`GRANTS`, as `app:role` pairs: `cron:scheduler objects:objects`.
 
 **Both keys, always.** A declaration ships with an image CI built, and anything that reaches CI
 could write one, so asking alone grants nothing: an app that asks for a role the node does not
@@ -327,10 +327,10 @@ it does not start at all**, so a node's first Caddy deployed by host needs `secr
 before it, or every door closes; the one it replaces is brought back by hand from the compose file
 beside it, `docker compose up -d`.
 
-**A node with no LAN asks for no certificate.** Its private side only mirrors the public names for
-the house's devices, so where host's configuration has no `LAN_ADDRESS` it renders neither the
-private side nor the certificates that serve it: such a Caddy answers its tunnel and its inside
-side, both plain HTTP, and needs no DNS token. One token that can write DNS stays on one node rather
+**A node with no LAN asks for no certificate.** Its LAN side serves the house's devices the node's
+own names over TLS, so where host's configuration has no `LAN_ADDRESS` it renders neither that side
+nor the certificates that serve it: such a Caddy answers its tunnel and the private API on its
+Docker networks, both plain HTTP, and needs no DNS token. One token that can write DNS stays on one node rather
 than on every one -- the direction platform's `spec/architecture/scheduling.md` sets for
 certificates held in one place.
 
@@ -345,62 +345,56 @@ standing on `edge` too. A tunnel that is down closes the public side and the not
 the one it replaced is brought back by hand, and the LAN and the tailnet, which never pass it, are
 how.
 
-### The inside side answers the internal gateway alone
+### Every node answers the private API, and sends on what is not its own
 
-**Caddy has a third side, `inside`, beside the LAN's and the tunnel's**: plain HTTP on 8080,
-published nowhere, so only a container sharing a network with Caddy reaches it -- and every app
-shares one, so that is not enough on its own. It refuses any request whose `x-internal` is not
-`INTERNAL_TOKEN`, from Caddy's `secret.env`, so of those containers only a holder of the token gets
-through: the internal gateway, and a service at home with a limit to count. It answers one name,
-`api.inside`, with every scope, taken off as the tunnel's side does, and counts no limit, since what
-reaches it was counted by the gateway that sent it. It is the node's counterpart of what a Worker
-has by binding and by VPC service; see platform's `spec/architecture/gateway.md`, "Inside the house, the same names
-answer locally".
+**Caddy answers `api.<private suffix>` on every node, in plain HTTP on its Docker networks.** When
+Caddy joins an app's network it also answers there by that name, so a container asking
+`api.internal.ixc.one/{scope}/...` reaches its own node's Caddy and never leaves the node to find
+it. A scope deployed on this node goes straight to its service; any other is rewritten to
+`/v{n}/{scope}/...` -- `v1` where the path names no version -- and sent over TLS to the public
+gateway with `X-Internal` set to `INTERNAL_TOKEN` from Caddy's `secret.env`, over whatever the caller
+sent, so a call across nodes is routed by the one gateway -- platform's
+`spec/architecture/gateway.md`, "Inside a node, its own services answer locally". The route admits
+only the node's app networks -- never the LAN or the tailnet, which keep the LAN side -- refuses
+the tunnel's address, and drops any `X-Internal` a caller sent; the token is set only for a private
+scope, and a public one goes on as any caller's request would. A node knows only its own apps'
+declarations, so the private scopes placed elsewhere are named in its `.env` as `PRIVATE_SCOPES`,
+and the app networks it admits as `APP_SOURCES`, Docker's default pool when left out. The public host is
+`PUBLIC_API` in host's configuration, `api.monoflake.com` when left out.
 
-**A scope says which sides carry it**, as `sides` under `[api]`: `private`, `tunnel` and `inside`,
-all three when left out. `quota` names `inside` alone, so its door, which takes any key, is on
-neither the LAN's API host nor the tunnel's. `inside` is never left out, since it is how the
-internal gateway reaches every service at home.
+**A scope says which sides carry it**, as `sides` under `[api]`: `private` and `tunnel`, both when
+left out.
 
-**The LAN's side carries the gateway's hostnames too** -- the `[edge]` its declaration claims, which
-host renders because the node grants the gateway `hosts` -- with certificates by DNS challenge as
-the private suffix has, and hands them to the internal gateway. It sets `Cf-Connecting-Ip` to
-the address it was asked from, over whatever the caller sent, which is the one place the internal
-gateway takes a caller's address from.
-
-### The resolver answers the gateway's names, and passes the rest on
+### The resolver serves the house, and answers nothing of its own
 
 **The house's DNS is `apps/network/resolver`, CoreDNS adopted from upstream, in a shape its name alone
 gets**: sandboxed as an app is, and publishing 53 over UDP and TCP on the machine, the one container
 beside Caddy that publishes anything. host renders its whole configuration, as it does Caddy's, and
-nothing about it is written by hand.
+nothing about it is written by hand. It runs only on a node with a LAN.
 
-**A query passes down one chain, and a step that fails is skipped, never waited on:**
+**It answers no name with the node.** The gateway's names reach the house through Cloudflare as
+they reach everybody -- platform's `spec/architecture/gateway.md`, "Inside a node, its own services
+answer locally"; until 2026-10-07 it answered them with the node, and the house's gateway behind
+them is retired. **A query passes down one chain, and a step that fails is skipped, never waited
+on:**
 
-1. **The gateway's names**, answered in the resolver's own process with the node's address, so the
-   LAN and the tailnet reach the internal gateway: the names its `[edge]` claims -- the API and CDN
-   hosts, the two apexes -- and a deployment's name read from its regions and providers, all
-   written there from the sdk's `GATEWAY_NAMES`. Every other name
-   in those zones -- `www.`, a record of the author's own -- goes on down the chain and answers as it
-   does in public. Nothing outside the process is asked, so this step has nothing to fail on.
-2. **A filter**, when one is deployed -- an ad blocker, say -- asked first for every other name. It
-   is to be in the chain because it runs, and out of it because it does not, with nothing changed
-   by hand. The step is rendered and tested, but no deployment feeds it yet: host passes an empty
-   list of filters. A name it blocks comes back blocked: that is an answer, not a failure, and is not asked
-   again further down. Its own upstream is the router or a public resolver, never this one, or a
-   query would go round in a circle.
-3. **The router**, then **the public resolvers**, from host's configuration, since they are the
+1. **A filter**, when one is deployed -- an ad blocker, say -- asked first. It is to be in the chain
+   because it runs, and out of it because it does not, with nothing changed by hand. The step is
+   rendered and tested, but no deployment feeds it yet: host passes an empty list of filters. A
+   name it blocks comes back blocked: that is an answer, not a failure, and is not asked again
+   further down. Its own upstream is the router or a public resolver, never this one, or a query
+   would go round in a circle.
+2. **The router**, then **the public resolvers**, from host's configuration, since they are the
    node's.
 
-From step 2 on, each is asked in that order, the first that answers wins, and one that is down --
-timing out, refusing, failing its health check -- is passed over until it answers again. A cache
-sits in front, so the chain is walked once per answer's lifetime.
+Each is asked in that order, the first that answers wins, and one that is down -- timing out,
+refusing, failing its health check -- is passed over until it answers again. A cache sits in front,
+so the chain is walked once per answer's lifetime.
 
 **The resolver is the house's first DNS, and the router its second.** DHCP hands both out: with the
-node down, a device falls back to the router, reaches the gateway's names through Cloudflare as the
-public does, and loses only the filter. The router's own upstream is never the node, for the same
-circle's sake. Devices away from home on the tailnet ask it too, for the gateway's zones alone, by
-the tailnet's split DNS.
+node down, a device falls back to the router and loses only the filter. The router's own upstream is
+never the node, for the same circle's sake. The tailnet asks it nothing: its split DNS for the
+gateway's zones went with the house's gateway.
 
 ### An upstream image is adopted, not rebuilt
 

@@ -9,7 +9,7 @@ use super::shape::{bound, shape_of};
 use super::tell::{tell_cron, tell_telemetry};
 use crate::sidecars::{self, drive};
 use crate::store::{Action, Deployed, Source, Stage};
-use crate::{Host, caddy, store};
+use crate::{Host, store};
 use deploy::manifest::Manifest;
 use deploy::replace::{self, Beside, replace_beside};
 use deploy::sidecar::Driver;
@@ -37,9 +37,7 @@ pub(super) async fn run_version(
 	// snapshotted.
 	if next.manifest.name == RESOLVER {
 		host.volumes.ensure(RESOLVER).await.map_err(replace::Error::from)?;
-		let apps = host.store.apps()?;
-		let edge = caddy::claimant(&host.config.grants, &apps).map(|(_, edge)| edge);
-		crate::resolver::apply(&host.config.resolver, &[], edge).await?;
+		crate::resolver::apply(&host.config.resolver, &[]).await?;
 	}
 	let members = [host.config.own_container.as_str(), host.config.caddy.container.as_str()];
 	let driver = sidecars::driver(host, Driver::Objects)?;

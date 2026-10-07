@@ -50,7 +50,9 @@ async fn main() -> anyhow::Result<()> {
 	deploy::clear_arrivals(&config.incoming)?;
 	let host = Arc::new(Host {
 		store: store::Store::open(&config.state)?,
-		engine: deploy::Engine::connect()?,
+		// Inside every app's network the private API host is the node's own Caddy.
+		engine: deploy::Engine::connect()?
+			.aliased(&config.caddy.container, &[caddy::private_api_host(&config.caddy).as_str()]),
 		volumes: deploy::Volumes::new(
 			config.apps_root.clone(),
 			config.snapshots_root.clone(),

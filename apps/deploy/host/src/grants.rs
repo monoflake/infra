@@ -17,8 +17,6 @@ pub enum Role {
 	Reporter,
 	/// The image every sidecar of a kind runs.
 	Driver(Driver),
-	/// Claims hostnames, which Caddy routes to it and the resolver answers with the node.
-	Hosts,
 	/// Talks to itself on every other node: its port published on the machine, and host's own
 	/// network joined.
 	Peer,
@@ -30,12 +28,15 @@ impl Role {
 			"scheduler" => Role::Scheduler,
 			"steward" => Role::Steward,
 			"reporter" => Role::Reporter,
-			"hosts" => Role::Hosts,
 			"peer" => Role::Peer,
 			other => Role::Driver(Driver::named(other)?),
 		})
 	}
 }
+
+/// Roles no longer granted, still accepted in `GRANTS` and ignored, so a node's `.env` written
+/// before one was retired does not stop host starting. Any other unknown role is refused.
+const RETIRED: [&str; 1] = ["hosts"];
 
 /// `GRANTS` read: `app:role` pairs separated by whitespace, as `cron:scheduler objects:objects`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -50,10 +51,18 @@ pub struct Refused {
 }
 
 impl Grants {
-	/// Every pair in `value`, or the first one that is not `app:role` with a role there is.
+	/// Every pair in `value`, or the first one that is not `app:role` with a role there is. A
+	/// retired role is passed over with a warning.
 	pub fn parse(value: &str) -> Result<Self, String> {
 		value
 			.split_whitespace()
+			.filter(|pair| {
+				let retired = pair.split_once(':').is_some_and(|(_, role)| RETIRED.contains(&role));
+				if retired {
+					eprintln!("host: GRANTS names `{pair}`, a retired role; it is ignored");
+				}
+				!retired
+			})
 			.map(|pair| {
 				let (app, role) = pair.split_once(':').ok_or_else(|| pair.to_owned())?;
 				let role = Role::parse(role).ok_or_else(|| pair.to_owned())?;
@@ -87,11 +96,6 @@ impl Grants {
 		let driver = Driver::named(&manifest.driver.as_ref()?.provides)?;
 		self.allows(&manifest.name, Role::Driver(driver)).then_some(driver)
 	}
-
-	/// Whether `manifest` claims hostnames the node lets it claim.
-	pub fn claims_hosts(&self, manifest: &Manifest) -> bool {
-		self.allows(&manifest.name, Role::Hosts)
-	}
 }
 
 #[cfg(test)]
@@ -108,16 +112,23 @@ mod tests {
 
 	#[test]
 	fn reads_the_pairs_the_node_names() {
-		let grants = Grants::parse(" cron:scheduler\tobjects:objects  gateway:hosts\n").unwrap();
+		let grants = Grants::parse(" cron:scheduler\tobjects:objects  relay:peer\n").unwrap();
 		assert!(grants.allows("cron", Role::Scheduler));
 		assert!(grants.allows("objects", Role::Driver(Driver::Objects)));
-		assert_eq!(grants.holder(Role::Hosts), Some("gateway"));
+		assert_eq!(grants.holder(Role::Peer), Some("relay"));
 		assert_eq!(grants.holder(Role::Steward), None);
 		assert_eq!(Grants::parse(""), Ok(Grants::default()));
 		assert_eq!(Grants::parse("cron"), Err("cron".into()));
 		assert_eq!(Grants::parse("cron:root"), Err("cron:root".into()));
 		assert_eq!(Grants::parse(":scheduler"), Err(":scheduler".into()));
 		assert!(Grants::parse("relay:peer").unwrap().allows("relay", Role::Peer));
+	}
+
+	#[test]
+	fn a_retired_role_is_ignored_and_any_other_unknown_one_refused() {
+		let grants = Grants::parse("gateway:hosts cron:scheduler").unwrap();
+		assert_eq!(grants, Grants::parse("cron:scheduler").unwrap());
+		assert_eq!(Grants::parse("gateway:inside"), Err("gateway:inside".into()));
 	}
 
 	#[test]

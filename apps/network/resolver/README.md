@@ -1,6 +1,6 @@
 # Resolver
 
-CoreDNS, answering the house's own names.
+CoreDNS, the house's DNS.
 
 ## License
 

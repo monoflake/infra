@@ -28,18 +28,16 @@ pub async fn route(host: &Host) -> Result<(), RouteError> {
 	Ok(())
 }
 
-/// The resolver's file from the names the claimant, if any, declares.
+/// The resolver's file, again from host's configuration as it now is.
 async fn apply_resolver(host: &Host) -> Result<(), RouteError> {
-	let apps = host.store.apps()?;
-	let edge = caddy::claimant(&host.config.grants, &apps).map(|(_, edge)| edge);
-	crate::resolver::apply(&host.config.resolver, &[], edge).await?;
+	crate::resolver::apply(&host.config.resolver, &[]).await?;
 	Ok(())
 }
 
 pub fn render(host: &Host) -> Result<serde_json::Value, store::Error> {
 	let (apps, routes) = (host.store.apps()?, host.store.routes()?);
 	let lan = host.config.resolver.address.is_some();
-	Ok(caddy::render(&host.config.caddy, &host.config.grants, &apps, &routes, lan))
+	Ok(caddy::render(&host.config.caddy, &apps, &routes, lan))
 }
 
 /// Attach Caddy and host to every app's network again. A Caddy container that was recreated

@@ -22,7 +22,7 @@ pub(crate) use shape::{SCRATCH, bind, sandbox};
 use crate::manifest::Manifest;
 use crate::sidecar::Sidecar;
 use bollard::Docker;
-use bollard::models::{NetworkConnectRequest, NetworkCreateRequest};
+use bollard::models::{EndpointSettings, NetworkConnectRequest, NetworkCreateRequest};
 use bollard::query_parameters::{
 	CreateContainerOptionsBuilder, ImportImageOptionsBuilder, ListImagesOptionsBuilder,
 	RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RestartContainerOptionsBuilder,
@@ -82,11 +82,27 @@ pub fn network_of(name: &str) -> String {
 
 pub struct Engine {
 	docker: Docker,
+	/// A member, and the names it answers by besides its own on every app's network.
+	aliases: Vec<(String, Vec<String>)>,
 }
 
 impl Engine {
 	pub fn connect() -> Result<Self, Error> {
-		Ok(Self { docker: Docker::connect_with_unix_defaults()? })
+		Ok(Self { docker: Docker::connect_with_unix_defaults()?, aliases: Vec::new() })
+	}
+
+	/// `member` answers by `aliases` too on every app's network it joins: Caddy, as the private API
+	/// host, so a container on the node reaches its own node's Caddy by that name. See
+	/// spec/architecture/host.md, "Every node answers the private API, and sends on what is not its
+	/// own".
+	pub fn aliased(mut self, member: &str, aliases: &[&str]) -> Self {
+		let aliases = aliases.iter().map(|alias| (*alias).to_owned()).collect();
+		self.aliases.push((member.to_owned(), aliases));
+		self
+	}
+
+	fn aliases_of(&self, member: &str) -> &[String] {
+		self.aliases.iter().find(|(name, _)| name == member).map_or(&[], |(_, aliases)| aliases)
 	}
 
 	/// Load an image archive and tag it as this app's, returning the image id.
@@ -133,14 +149,27 @@ impl Engine {
 		Ok(inspected.config.and_then(|config| config.user).as_deref().and_then(numeric_user))
 	}
 
-	/// The app's network, shared with Caddy and with host for its health checks, and nothing else.
+	/// The app's network, shared with Caddy and with host for its health checks, and nothing else;
+	/// a member with aliases answers by them there too.
 	pub async fn network(&self, name: &str, members: &[&str]) -> Result<(), Error> {
 		let network = network_of(name);
-		self.join(&network, members, true).await
+		self.attach(&network, members, true, true).await
 	}
 
 	/// Attach `members` to `network`, which is made first when `create` allows it.
 	pub async fn join(&self, network: &str, members: &[&str], create: bool) -> Result<(), Error> {
+		self.attach(network, members, create, false).await
+	}
+
+	/// `join`, each member under its aliases where `aliased`. An alias is given when a member is
+	/// attached and cannot be added after, so one attached without it is attached again.
+	async fn attach(
+		&self,
+		network: &str,
+		members: &[&str],
+		create: bool,
+		aliased: bool,
+	) -> Result<(), Error> {
 		let network = network.to_owned();
 		match self.docker.inspect_network(&network, None).await {
 			Ok(_) => {}
@@ -163,11 +192,41 @@ impl Engine {
 			.into_values()
 			.filter_map(|container| container.name)
 			.collect();
-		for member in members.iter().filter(|member| !attached.contains(**member)) {
-			let request = NetworkConnectRequest { container: (*member).into(), endpoint_config: None };
+		for member in members {
+			let aliases = if aliased { self.aliases_of(member) } else { &[] };
+			if attached.contains(*member) {
+				if aliases.is_empty() || self.answers_by(&network, member, aliases).await? {
+					continue;
+				}
+				let request = bollard::models::NetworkDisconnectRequest {
+					container: (*member).into(),
+					force: Some(true),
+				};
+				self.docker.disconnect_network(&network, request).await?;
+			}
+			let endpoint_config = (!aliases.is_empty())
+				.then(|| EndpointSettings { aliases: Some(aliases.to_vec()), ..Default::default() });
+			let request = NetworkConnectRequest { container: (*member).into(), endpoint_config };
 			self.docker.connect_network(&network, request).await?;
 		}
 		Ok(())
+	}
+
+	/// Whether `member` already answers by every one of `aliases` on `network`.
+	async fn answers_by(
+		&self,
+		network: &str,
+		member: &str,
+		aliases: &[String],
+	) -> Result<bool, Error> {
+		let inspected = self.docker.inspect_container(member, None).await?;
+		let present = inspected
+			.network_settings
+			.and_then(|settings| settings.networks)
+			.and_then(|mut networks| networks.remove(network))
+			.and_then(|endpoint| endpoint.aliases)
+			.unwrap_or_default();
+		Ok(aliases.iter().all(|alias| present.contains(alias)))
 	}
 
 	/// Stop and remove the app's container, if it has one.

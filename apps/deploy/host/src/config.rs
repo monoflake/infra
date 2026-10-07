@@ -34,9 +34,9 @@ pub struct Config {
 	pub grants: crate::grants::Grants,
 }
 
-/// The house's DNS: where host writes its configuration, the node's LAN address it answers the
-/// gateway's names with and publishes DNS on, and what it asks after its own names. See
-/// spec/architecture/host.md, "The resolver answers the gateway's names, and passes the rest on".
+/// The house's DNS: where host writes its configuration, the node's LAN address it publishes DNS
+/// on, and what it asks, in order. See spec/architecture/host.md, "The resolver serves the house,
+/// and answers nothing of its own".
 #[derive(Debug, Clone)]
 pub struct ResolverConfig {
 	/// The Corefile, as this container sees it.
@@ -64,6 +64,13 @@ pub struct CaddyConfig {
 	pub tunnel_source: String,
 	pub acme_email: String,
 	pub dns_resolver: String,
+	/// The public gateway's API host, where the private side sends a scope not deployed here.
+	pub public_api: String,
+	/// The node's Docker app networks, the only sources the private API admits.
+	pub app_sources: Vec<String>,
+	/// The private scopes, `public = false`, sent to the public gateway with `INTERNAL_TOKEN`; a
+	/// node knows its own declarations alone, so the rest are named here.
+	pub private_scopes: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -116,6 +123,15 @@ impl Config {
 				tunnel_source: required("TUNNEL_SOURCE")?,
 				acme_email: required("ACME_EMAIL")?,
 				dns_resolver: optional("DNS_RESOLVER", "1.1.1.1"),
+				public_api: optional("PUBLIC_API", "api.monoflake.com"),
+				app_sources: optional("APP_SOURCES", "172.16.0.0/12")
+					.split(',')
+					.map(|s| s.trim().to_owned())
+					.collect(),
+				private_scopes: optional("PRIVATE_SCOPES", "")
+					.split_whitespace()
+					.map(str::to_owned)
+					.collect(),
 			},
 			resolver: ResolverConfig {
 				file: apps_root.join("resolver").join("host").join("Corefile"),

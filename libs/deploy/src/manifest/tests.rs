@@ -176,14 +176,14 @@ fn refuses_a_limit_it_could_not_count() {
 }
 
 #[test]
-fn names_its_sides_from_three_and_never_leaves_out_inside() {
+fn names_its_sides_from_the_two_there_are() {
 	let mut geo = Manifest::parse(GEO).unwrap();
 	let api = geo.api.as_mut().unwrap();
-	assert!(api.carried_on("private") && api.carried_on("tunnel") && api.carried_on("inside"));
-	api.sides = Some(vec!["inside".into()]);
-	assert!(!api.carried_on("private") && api.carried_on("inside"));
+	assert!(api.carried_on("private") && api.carried_on("tunnel"));
+	api.sides = Some(vec!["tunnel".into()]);
+	assert!(!api.carried_on("private") && api.carried_on("tunnel"));
 	assert_eq!(geo.check("geo", "rdu"), Ok(()));
-	for sides in [vec!["private"], vec!["inside", "outside"], vec![]] {
+	for sides in [vec!["inside"], vec!["private", "outside"], vec![]] {
 		let mut broken = geo.clone();
 		broken.api.as_mut().unwrap().sides = Some(sides.iter().map(|side| (*side).into()).collect());
 		assert_eq!(broken.check("geo", "rdu"), Err(Invalid::Sides), "{sides:?}");
@@ -400,18 +400,4 @@ fn a_scheduled_service_answers_through_its_scope_or_its_socket() {
 	)
 	.unwrap();
 	assert_eq!(unreachable.check("probe", "rdu"), Err(Invalid::Unscheduled("probe".into())));
-}
-
-#[test]
-fn an_edge_claims_hostnames_and_nothing_else() {
-	let gateway = Manifest::parse(include_str!("../../fixtures/gateway.toml")).unwrap();
-	let edge = gateway.edge.as_ref().expect("the gateway claims its names");
-	assert!(edge.hosts.iter().any(|host| host.starts_with("*.")));
-	assert!(edge.deployments.is_some());
-	assert_eq!(gateway.check("gateway", "rdu"), Ok(()));
-	for bad in ["*", "*.*.com", "localhost", "Api.example.com", "a..b"] {
-		let text = format!("{GEO}\n[edge]\nhosts = [\"{bad}\"]\n");
-		let manifest = Manifest::parse(&text).unwrap();
-		assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::Edge(bad.into())), "{bad}");
-	}
 }
