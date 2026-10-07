@@ -64,8 +64,10 @@ Decided on 2026-10-07, in place of a rule that placed the platform on whichever 
 
 **A node declares `emulate = ["arm64"]` in `nodes.toml` to run arm64 images it cannot run natively.**
 `mise run node` installs QEMU's user-mode emulation and registers it with the kernel's
-`binfmt_misc`, fixed at registration so a container needs nothing of its own, and host runs an app
-that asks for arm64 there by emulation -- [host.md](host.md), "An app may ask for one architecture".
+`binfmt_misc`, fixed at registration so a container needs nothing of its own -- Debian's
+`qemu-user-binfmt` registers it so; an Alpine node may not declare it, none being x86 and its
+registration unproven -- and host is told `EMULATE=arm64` in its `.env` and runs an app that asks
+for arm64 there by emulation -- [host.md](host.md), "An app may ask for one architecture".
 It is for an app whose files must be the same bytes on every node, which an arm64 program
 emulated writes exactly as a native one does, its C library included: the platform's Postgres,
 streaming physically between `tyo`, `rdu` and `buf` -- platform's `spec/architecture/databases.md`.
