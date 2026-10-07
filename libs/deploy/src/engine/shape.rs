@@ -39,9 +39,9 @@ pub enum Shape {
 	/// socket-served service's data directory at `/sockets/<service>`. See platform's
 	/// spec/architecture/cron.md, "host gives `cron` the table".
 	Scheduler { env: Vec<String>, sockets: Vec<(String, PathBuf)> },
-	/// The steward, `apt` here: sandboxed, its own network, root so systemd lets it start a unit, and
-	/// the machine's D-Bus system bus socket bound at the same path. See platform's
-	/// spec/architecture/apt.md, "The door".
+	/// The steward, `apt` or `apk`: sandboxed, its own network, root, and whichever door the machine
+	/// has -- see `steward_doors`. See platform's spec/architecture/packages.md, "`apk` reaches the
+	/// machine through a named pipe".
 	Steward { env: Vec<String> },
 	/// The reporter, `telemetry` here: sandboxed like any app, on its own network, plus the meter's
 	/// data directory, `meter`, bound read-only at `socket_mount("meter")`. See
@@ -120,6 +120,33 @@ pub(super) fn socket_service_of(destination: &str) -> Option<String> {
 /// platform's spec/architecture/apt.md, "The door".
 pub const DBUS_SOCKET: &str = "/run/dbus/system_bus_socket";
 
+/// The directory of the machine's own door where there is no bus, its named pipe and the state
+/// files beside it, and where the steward shape mounts it read-only. See platform's
+/// spec/architecture/packages.md, "`apk` reaches the machine through a named pipe".
+pub const APK_DOOR: (&str, &str) = ("/var/lib/apk-door", "/door");
+
+/// Each door the steward shape may be given, in the order tried, as a bind mount. host cannot see
+/// the machine's paths, so the first Docker accepts as a bind source is the one the machine has.
+/// The door's directory goes first: it is there only where `mise run node` put it, while a bus can
+/// be on a machine for something else.
+pub(super) fn steward_doors() -> [Mount; 2] {
+	let (directory, mounted) = APK_DOOR;
+	[
+		bind(directory.into(), mounted.into(), true),
+		bind(DBUS_SOCKET.into(), DBUS_SOCKET.into(), false),
+	]
+}
+
+/// Docker refusing a bind mount because its source is not on the machine, which it checks before
+/// it creates anything.
+pub(super) fn missing_source(error: &bollard::errors::Error) -> bool {
+	matches!(
+		error,
+		bollard::errors::Error::DockerResponseServerError { status_code: 400, message }
+			if message.contains("bind source path does not exist")
+	)
+}
+
 /// A structured mount rather than a `source:target` string, which a target containing a colon could
 /// extend with options of its own.
 pub(crate) fn bind(source: String, target: String, read_only: bool) -> Mount {
@@ -152,15 +179,6 @@ pub(super) fn reporter_mounts(own: Option<Mount>, meter: &Path) -> Vec<Mount> {
 	own
 		.into_iter()
 		.chain(std::iter::once(bind(meter.display().to_string(), socket_mount("meter"), true)))
-		.collect()
-}
-
-/// The steward shape's mounts: the app's own directory, if declared, plus the machine's D-Bus
-/// system bus socket at the same path. See platform's spec/architecture/apt.md.
-pub(super) fn steward_mounts(own: Option<Mount>) -> Vec<Mount> {
-	own
-		.into_iter()
-		.chain(std::iter::once(bind(DBUS_SOCKET.into(), DBUS_SOCKET.into(), false)))
 		.collect()
 }
 
@@ -255,7 +273,8 @@ impl Engine {
 				(config, env.clone())
 			}
 			Shape::Scheduler { env, sockets } => (sandboxed(scheduler_mounts(own, sockets)), env.clone()),
-			Shape::Steward { env } => (sandboxed(steward_mounts(own)), env.clone()),
+			// Its door is added as it is created, below.
+			Shape::Steward { env } => (sandboxed(own.into_iter().collect()), env.clone()),
 			Shape::Reporter { env, meter } => (sandboxed(reporter_mounts(own, meter)), env.clone()),
 			Shape::Peer { env } => {
 				let config = HostConfig {
@@ -304,8 +323,9 @@ impl Engine {
 		let body = ContainerCreateBody {
 			image: Some(version.image.clone()),
 			env: Some(env),
-			// apt runs as root so systemd's D-Bus API lets it start a unit; see
-			// platform's spec/architecture/apt.md, "The door".
+			// The steward runs as root, so systemd's D-Bus API lets it start a unit, and the door's
+			// pipe takes its word; see platform's spec/architecture/apt.md, "The door", and
+			// packages.md.
 			user: matches!(shape, Shape::Steward { .. }).then(|| "0:0".to_owned()),
 			labels: Some(HashMap::from([
 				("host.app".into(), name.clone()),
@@ -336,11 +356,34 @@ impl Engine {
 			}),
 			..Default::default()
 		};
-		self
-			.docker
-			.create_container(Some(CreateContainerOptionsBuilder::new().name(name).build()), body)
-			.await?;
+		match shape {
+			Shape::Steward { .. } => self.create_steward(name, body).await?,
+			_ => self.create(name, body).await?,
+		}
 		self.docker.start_container(name, None).await?;
 		Ok(())
+	}
+
+	async fn create(&self, name: &str, body: ContainerCreateBody) -> Result<(), Error> {
+		let options = CreateContainerOptionsBuilder::new().name(name).build();
+		self.docker.create_container(Some(options), body).await?;
+		Ok(())
+	}
+
+	/// Create the steward with the first of `steward_doors` the machine has, which Docker answers by
+	/// refusing a bind whose source is missing before it creates anything; with neither, refuse.
+	/// See platform's spec/architecture/packages.md, "`apk` reaches the machine through a named
+	/// pipe".
+	async fn create_steward(&self, name: &str, body: ContainerCreateBody) -> Result<(), Error> {
+		for door in steward_doors() {
+			let mut body = body.clone();
+			let config = body.host_config.get_or_insert_with(HostConfig::default);
+			config.mounts.get_or_insert_with(Vec::new).push(door);
+			match self.create(name, body).await {
+				Err(Error::Docker(error)) if missing_source(&error) => continue,
+				done => return done,
+			}
+		}
+		Err(Error::NoDoor)
 	}
 }

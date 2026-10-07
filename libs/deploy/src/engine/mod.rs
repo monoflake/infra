@@ -14,8 +14,8 @@ pub use report::{
 	NetworkMember, container_info, filesystem_usage, network_info,
 };
 pub use shape::{
-	DBUS_SOCKET, EDGE_MOUNTS, EDGE_NETWORK, EDGE_PORTS, OBSERVED, RESOLVER_MOUNT, RESOLVER_PORTS,
-	Shape, socket_mount,
+	APK_DOOR, DBUS_SOCKET, EDGE_MOUNTS, EDGE_NETWORK, EDGE_PORTS, OBSERVED, RESOLVER_MOUNT,
+	RESOLVER_PORTS, Shape, socket_mount,
 };
 pub(crate) use shape::{SCRATCH, bind, sandbox};
 
@@ -61,6 +61,8 @@ pub enum Error {
 	Archive { path: String, source: std::io::Error },
 	#[error("making {path}: {source}")]
 	Directory { path: String, source: std::io::Error },
+	#[error("the machine has neither {DBUS_SOCKET} nor {}, so the steward has no door", APK_DOOR.0)]
+	NoDoor,
 }
 
 /// A 404 from Docker: the thing asked about does not exist.

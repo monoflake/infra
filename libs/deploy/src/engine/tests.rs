@@ -149,14 +149,35 @@ fn the_scheduler_shape_mounts_its_own_directory_and_every_socket_service() {
 }
 
 #[test]
-fn the_steward_shape_mounts_the_machines_dbus_socket() {
-	let mounts = steward_mounts(None);
-	assert_eq!(mounts.len(), 1);
-	assert_eq!(mounts[0].source.as_deref(), Some(DBUS_SOCKET));
-	assert_eq!(mounts[0].target.as_deref(), Some(DBUS_SOCKET));
-	assert_eq!(mounts[0].read_only, Some(false));
-	let own = Some(bind("/data/apps/apt/data".into(), "/state".into(), false));
-	assert_eq!(steward_mounts(own).len(), 2);
+fn the_steward_tries_the_doors_directory_read_only_and_then_the_bus() {
+	let [door, bus] = steward_doors();
+	assert_eq!(bus.source.as_deref(), Some(DBUS_SOCKET));
+	assert_eq!(bus.target.as_deref(), Some(DBUS_SOCKET));
+	assert_eq!(bus.read_only, Some(false));
+	assert_eq!(door.source.as_deref(), Some("/var/lib/apk-door"));
+	assert_eq!(door.target.as_deref(), Some("/door"));
+	assert_eq!(door.read_only, Some(true));
+	assert!([door, bus].iter().all(|mount| mount.typ == Some(bollard::models::MountType::BIND)));
+}
+
+#[test]
+fn only_a_missing_bind_source_moves_the_steward_on_to_the_next_door() {
+	let refused = |status_code: u16, message: &str| {
+		bollard::errors::Error::DockerResponseServerError { status_code, message: message.into() }
+	};
+	assert!(missing_source(&refused(
+		400,
+		"invalid mount config for type \"bind\": bind source path does not exist: /run/dbus/system_bus_socket",
+	)));
+	assert!(!missing_source(&refused(
+		400,
+		"invalid mount config for type \"bind\": field Target must not be empty"
+	)));
+	assert!(!missing_source(&refused(
+		409,
+		"Conflict. The container name \"/apk\" is already in use"
+	)));
+	assert!(!missing_source(&refused(500, "bind source path does not exist: /door")));
 }
 
 #[test]

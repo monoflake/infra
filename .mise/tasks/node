@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 #MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, start its first host: `node host <name> [--run RUN_ID] [--dry-run]`, or ask its host over the tailnet: `node apps|events|restart|redeploy|rollback|remove|deploy <name> ...`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
-/data, SSH's local forwarding, the egress proxy, the firewall, apt's units on Debian, and what the
-relay peer and host read. Run again it changes nothing. See spec/architecture/nodes.md.
+/data, SSH's local forwarding, the egress proxy, the firewall, apt's units on Debian, apk's door on
+Alpine, and what the relay peer and host read. Run again it changes nothing. See
+spec/architecture/nodes.md.
 
 `node host <name>` starts the first host on a node set up that way and hands it a CI run, from
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
@@ -30,6 +31,13 @@ NODES = ROOT / "nodes"
 # The systemd units apt starts, kept in the platform's checkout beside this one. See platform's
 # spec/architecture/apt.md, "The work stays on the machine, in two units".
 APT_UNITS = ROOT.parent / "platform/apps/system/apt/units"
+# The door apk's container writes to on an Alpine machine, kept there too, and where each file goes.
+# See platform's spec/architecture/packages.md, "`apk` reaches the machine through a named pipe".
+APK_DOOR = ROOT.parent / "platform/apps/system/apk/door"
+APK_DOOR_FILES = (
+	("apk-door.initd", "/etc/init.d/apk-door"),
+	("apk-door.sh", "/usr/local/libexec/apk-door"),
+)
 # How long a firewall that locked the session out stays before the machine takes it down itself.
 GUARD_SECONDS = 60
 
@@ -168,11 +176,11 @@ echo written
 # What the relay app, a peer on every node, is given. Its port is `port` in its service.toml in the
 # platform. See spec/architecture/host.md, "A role is asked for by the app and granted by the node".
 RELAY_PORT = 12012
-# The roles host's `GRANTS` names on every node, and on Debian the steward that updates it too.
-# See platform's spec/architecture/cron.md and apt.md.
+# The roles host's `GRANTS` names on every node, and the steward that updates it, by family. See
+# platform's spec/architecture/cron.md, apt.md and packages.md.
 GRANTS = {
 	"debian": ("relay:peer", "cron:scheduler", "apt:steward"),
-	"alpine": ("relay:peer", "cron:scheduler"),
+	"alpine": ("relay:peer", "cron:scheduler", "apk:steward"),
 }
 # The private scopes host's Caddy sends to the gateway; see spec/architecture/host.md.
 PRIVATE_SCOPES = "ledger"
@@ -334,6 +342,29 @@ def apt_units():
 	return "\n".join(lines) + "\n"
 
 
+def apk_door():
+	"""Installs apk's door, enabled at boot, and restarts it only when a file it runs changed or it
+	is not running. See platform's spec/architecture/packages.md, "`apk` reaches the machine through
+	a named pipe"."""
+	missing = [name for name, _ in APK_DOOR_FILES if not (APK_DOOR / name).is_file()]
+	if missing:
+		sys.exit(f"node: {APK_DOOR} has no {', '.join(missing)}; the platform beside infra carries them")
+	lines = ["changed=0"]
+	for name, target in APK_DOOR_FILES:
+		lines += [
+			f"mkdir -p {Path(target).parent}",
+			f"printf '%s' {encoded((APK_DOOR / name).read_text())} | base64 -d > {target}.new",
+			f"chmod 755 {target}.new",
+			f"cmp -s {target}.new {target} || changed=1",
+			f"mv {target}.new {target}",
+		]
+	lines.append("rc-update add apk-door default >/dev/null")
+	lines.append(
+		'if [ "$changed" = 1 ] || ! rc-service --quiet apk-door status; then rc-service --quiet apk-door restart; fi'
+	)
+	return "\n".join(lines) + "\n"
+
+
 def relay_peers(nodes):
 	"""Every node's relay by its tailnet address, in nodes.toml order; a relay skips its own."""
 	return " ".join(f"{name}={tailnet_ipv4(name)}:{RELAY_PORT}" for name in nodes)
@@ -363,6 +394,8 @@ def script(name, node, proxies):
 	lines.append(SETUP[family])
 	if family == "debian":
 		lines.append(apt_units())
+	elif family == "alpine":
+		lines.append(apk_door())
 	# Every node with IPv4 is a proxy; one without asks them. See spec/architecture/nodes.md.
 	lines.append(proxy(family) if node.get("ipv4", True) else egress(proxies))
 	# The old name is replaced where /etc/hosts gives it, so the machine still resolves itself.
