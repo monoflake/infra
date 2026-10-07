@@ -80,8 +80,9 @@ ruleset, Docker's and Tailscale's with it; the node loads its table with a unit 
 
 **`mise run node <name>` brings a machine to what [`nodes/`](../../nodes/) holds for it**, and run
 again changes nothing: its name as hostname and on the tailnet, UTC, the files that make Docker wait
-for `/data` -- [host.md](host.md), "The control plane going down is not an outage" -- and the
-firewall, each written once for Debian and once for Alpine. cloud-init is told to keep the hostname,
+for `/data` -- [host.md](host.md), "The control plane going down is not an outage" -- the
+firewall, and sshd allowing local port forwarding, which is how `mise run node <verb>` reaches host
+and which Alpine refuses as shipped -- each written once for Debian and once for Alpine. cloud-init is told to keep the hostname,
 or it would put the provider's back at every boot. The first run names the machine by `--address`,
 since it is not yet called by its name. A name set by hand in Tailscale's console outranks the one the machine
 asks for, so a node renamed there keeps its old tailnet name until the console says otherwise.

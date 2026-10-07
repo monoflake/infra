@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 #MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, start its first host: `node host <name> [--run RUN_ID] [--dry-run]`, or ask its host over the tailnet: `node apps|events|restart|redeploy|rollback|remove|deploy <name> ...`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
-/data, the egress proxy, the firewall and what the relay peer reads. Run again it changes
-nothing. See spec/architecture/nodes.md.
+/data, SSH's local forwarding, the egress proxy, the firewall and what the relay peer reads. Run
+again it changes nothing. See spec/architecture/nodes.md.
 
 `node host <name>` starts the first host on a node set up that way and hands it a CI run, from
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
@@ -30,15 +30,20 @@ NODES = ROOT / "nodes"
 # How long a firewall that locked the session out stays before the machine takes it down itself.
 GUARD_SECONDS = 60
 
+# Read first of sshd's drop-ins, so it holds over the system's own settings on either family.
+SSHD = ("sshd.conf", "/etc/ssh/sshd_config.d/00-node.conf", "644")
+
 # Each file the node needs, by family: where it comes from in nodes/ and where it goes.
 FILES = {
 	"debian": [
 		("debian/node-firewall.service", "/etc/systemd/system/node-firewall.service", "644"),
 		("debian/docker-data.conf", "/etc/systemd/system/docker.service.d/data.conf", "644"),
+		SSHD,
 	],
 	"alpine": [
 		("alpine/node-firewall", "/etc/init.d/node-firewall", "755"),
 		("alpine/data-mount", "/etc/init.d/data-mount", "755"),
+		SSHD,
 	],
 }
 
@@ -50,6 +55,7 @@ if [ -d /etc/cloud/cloud.cfg.d ]; then
 	printf '%s' "$cloud_hostname" | base64 -d > /etc/cloud/cloud.cfg.d/99-node-hostname.cfg
 fi
 timedatectl set-timezone UTC
+sshd -t && systemctl reload ssh
 systemctl daemon-reload
 systemctl enable --quiet node-firewall
 """,
@@ -58,6 +64,7 @@ echo "$name" > /etc/hostname
 hostname "$name"
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 echo UTC > /etc/timezone
+sshd -t && rc-service --quiet sshd reload
 command -v nft >/dev/null || apk add --quiet nftables
 grep -q '^rc_need="data-mount"' /etc/conf.d/docker || echo 'rc_need="data-mount"' >> /etc/conf.d/docker
 rc-update add data-mount default >/dev/null
