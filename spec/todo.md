@@ -28,3 +28,7 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   on all seven nodes at once on 2026-10-07 would have stopped at one. And whatever must be true
   between the node's own apps -- which networks Caddy and keeper share with host -- is put right
   on every start, never left to the order things were deployed in.
+- **Every node schedules and updates itself.** `mise run node` writes `NODE_SLOT`, grants
+  `cron:scheduler` everywhere and `apt:steward` on Debian, installs `apt`'s units and turns off the
+  image's own updates; host turns a job's `spread` into its `offset` -- platform's
+  `spec/architecture/cron.md`, "A weekly job is spread across the nodes, a day apart".

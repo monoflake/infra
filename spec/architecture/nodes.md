@@ -41,13 +41,24 @@ of `NODE` in host's `.env`.
 something fits on it change for different reasons -- an upgrade changes the one, a lapsed plan the
 other -- so a tier mixing both would be rewritten for either.
 
-## Which node holds the platform is a placement's conclusion
+## Three nodes are the core, named by the author
 
-No tier is called core. What the platform keeps -- its database's primary, the scheduler's state --
-is placed by a rule over the axes above: `datacenter`, enough memory, an expiry years away; its
-replicas by the same rule in another failure domain. Whichever node satisfies the rule holds the
-platform, and today that is `tyo`. Small `datacenter` nodes run what keeps nothing; `home` holds what
-only the author reads and what needs its disk.
+**`rdu`, `buf` and `tyo` are the core**, `core = true` in `nodes.toml`, and every other node is a
+worker. The core holds the control plane -- the relay's log, platform's
+`spec/architecture/relay.md`, the deployer, the platform's database -- and a worker runs apps and
+keeps nothing the rest depends on. The workspace's `spec/architecture/ship-cloud.md` is why a
+node somebody else brought is never core.
+
+- **Three accounts, so losing any one leaves two that agree.** Two of them are in the eastern US,
+  so the two that make a majority are milliseconds apart, and `tyo` is the copy across the ocean.
+- **Named, not derived from the axes above**, since the one set that is three accounts with a
+  majority in the east has a `home` node in it and an expiry a year away. What that costs is taken
+  knowingly: `rdu` goes down with the house, leaving two cores that agree across the Pacific, slower
+  but up; `buf` is held until 2027, and what replaces it takes its place in the core.
+- **`gvx` and `bru` are workers**: a gigabyte of memory each and no IPv4.
+
+Decided on 2026-10-07, in place of a rule that placed the platform on whichever node was
+`datacenter`, large and long-held, which named `tyo` alone.
 
 ## Nothing comes in but over the tailnet
 
