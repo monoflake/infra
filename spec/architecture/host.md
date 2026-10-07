@@ -234,6 +234,13 @@ the build is slower, and it runs on the Mac, where nobody is waiting on a reques
 is set, so an image is not tied to the chip of the node it was first built for. The profile is its
 own rather than `release`, which a local release build would otherwise inherit and pay for.
 
+**An arm64 image runs on ARMv8.0, the oldest arm64 node, `rdu`'s Cortex-A72.** It has no LSE atomics,
+which `tyo`'s Neoverse N1 has, so nothing is built for more than `armv8-a`: no `target-cpu`, no
+`-march` above it, and what is faster on a newer core is chosen at run time, as Debian's own builds
+do -- Postgres's CRC32C and its atomics among them. An adopted image is proved on `rdu` before it
+is trusted, since an upstream built for ARMv8.2, as ClickHouse's is, stops there on its first
+instruction from beyond. Such an image may still run, placed where the cores are new enough.
+
 **Every Rust image compiles through sccache, so a crate built for one image is a hit for the next.**
 A CI runner's builder starts empty, so a cache mount alone kept nothing between jobs and every image
 compiled its dependencies again. The backend is whatever the environment starting the build names:
