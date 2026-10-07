@@ -29,3 +29,13 @@ is decided in direction and not in shape: which of the two, and where the first 
 It must land before web is admitted as a source. Also: host fetches with the monoflake-owned
 `GITHUB_ACTIONS_TOKEN`, and a canmi21 repository needs `GITHUB_ACTIONS_TOKEN_CANMI21`, picked by the
 source's owner.
+
+## An old run's notice can roll an app back
+
+host takes each `(repository, run)` once per process, and again if taking it failed, but never asks
+whether a run is newer than the one that deployed the app. A notice naming an old successful run --
+after host restarts, or for a run it never took -- deploys that run's image over a newer one. The
+platform's deployer refuses a run that is not newer than the last that deployed its Worker
+(platform's `spec/architecture/deployer.md`); host keeping the same mark per app, and refusing a
+run not newer than it, is the fix in direction. Where the mark is kept, and how an operator's
+explicit rollback stays allowed past it, are undecided.
