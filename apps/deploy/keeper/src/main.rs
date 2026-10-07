@@ -11,7 +11,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use deploy::canary::{Canary, Held};
-use deploy::replace::{Error as Failed, replace};
+use deploy::replace::{Error as Failed, replace, replace_back};
 use deploy::{Engine, Manifest, Shape, Version, Volumes};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,7 @@ async fn main() -> anyhow::Result<()> {
 	let listen = setting("LISTEN", &format!("0.0.0.0:{PORT}"));
 	let guarded = Router::new()
 		.route("/apps/host", post(upload).layer(DefaultBodyLimit::disable()))
+		.route("/host/redeploy", post(redeploy_host))
 		.layer(middleware::from_fn_with_state(keeper.clone(), admit));
 	let router = Router::new()
 		.route("/health", get(health))
@@ -188,6 +189,81 @@ async fn upload(State(keeper): State<Arc<Keeper>>, mut parts: Multipart) -> Resp
 		}
 		Err(Reply(status, code, message)) => response::failure_with(status, code, message),
 	}
+}
+
+/// Recreate host from the version and image it runs, on the node's `.env` as it now is: how a
+/// changed `.env` reaches host without a run that built it. See spec/architecture/host.md, "A
+/// changed `.env` reaches host through keeper".
+async fn redeploy_host(State(keeper): State<Arc<Keeper>>) -> Response {
+	match recreate_host(&keeper).await {
+		Ok(image) => {
+			response::success(StatusCode::OK, serde_json::json!({ "name": "host", "image": image }))
+		}
+		Err(Reply(status, code, message)) => response::failure_with(status, code, message),
+	}
+}
+
+/// Refused while host has an event running, since replacing it mid-deploy would leave that app
+/// half replaced; a new host that fails its check is put back on the environment it ran with.
+async fn recreate_host(keeper: &Keeper) -> Result<String, Reply> {
+	let internal = |error: &dyn std::fmt::Display| {
+		Reply(StatusCode::INTERNAL_SERVER_ERROR, "service_unavailable", error.to_string())
+	};
+	let _one = keeper.replacing.lock().await;
+	if let Some(running) = host_busy(keeper).await {
+		let message = format!("host has an event running, {running}; ask again once it ends");
+		return Err(Reply(StatusCode::CONFLICT, "job_running", message));
+	}
+	let fallback =
+		Manifest::parse(include_str!("../../host/service.toml")).map_err(|e| internal(&e))?;
+	let current = keeper.engine.current("host", &fallback).await.map_err(|e| internal(&e))?;
+	let Some(current) = current else {
+		return Err(Reply(StatusCode::NOT_FOUND, "no_such_app", "No host runs on this node".into()));
+	};
+	let before = keeper.engine.env_of("host").await.map_err(|e| internal(&e))?.unwrap_or_default();
+	let env = deploy::read_env(&keeper.platform_env).map_err(|e| internal(&e))?;
+	let members = [keeper.own_container.as_str()];
+	let (shape, back) = (Shape::Platform { env }, Shape::Platform { env: before });
+	let replaced =
+		replace_back(&keeper.engine, &keeper.volumes, &members, &shape, &back, &current, &current);
+	match replaced.await {
+		Ok(_) => Ok(current.image),
+		Err(error @ (Failed::Unhealthy { .. } | Failed::FirstFailed { .. })) => {
+			Err(Reply(StatusCode::BAD_GATEWAY, "app_unavailable", error.to_string()))
+		}
+		Err(error) => Err(internal(&error)),
+	}
+}
+
+/// The event host says is still running, if any, as `<action> of <app>`. A host that does not
+/// answer is not busy deploying anything, and is what recreating it is for.
+async fn host_busy(keeper: &Keeper) -> Option<String> {
+	let address = host_address();
+	let path = "/api/events?limit=50";
+	let asked = deploy::http::get_as(&address, &address, path, &keeper.token, ASKING).await;
+	match asked {
+		Ok((status, body)) if (200..300).contains(&status) => running_event(&body),
+		Ok((status, _)) => {
+			eprintln!("keeper: host answered {status} to its events; recreating it anyway");
+			None
+		}
+		Err(error) => {
+			eprintln!("keeper: asking host for its events: {error}; recreating it anyway");
+			None
+		}
+	}
+}
+
+/// How long host has to say what it is doing.
+const ASKING: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The first running event in host's answer to `/api/events`, as `<action> of <app>`.
+fn running_event(body: &str) -> Option<String> {
+	let envelope: serde_json::Value = serde_json::from_str(body).ok()?;
+	envelope["data"].as_array()?.iter().find(|event| event["outcome"] == "running").map(|event| {
+		let (action, app) = (event["action"].as_str(), event["app"].as_str());
+		format!("{} of {}", action.unwrap_or("an action"), app.unwrap_or("an app"))
+	})
 }
 
 fn upload_refused(error: impl ToString) -> Response {
@@ -412,6 +488,18 @@ mod tests {
 	fn host_is_where_host_declares_it() {
 		let declaration = include_str!("../../host/service.toml");
 		assert!(declaration.lines().any(|line| line.trim() == format!("port = {}", super::HOST_PORT)));
+	}
+
+	#[test]
+	fn host_is_busy_while_any_event_it_lists_is_running() {
+		let events = |rows: &str| format!(r#"{{"status":"success","data":[{rows}]}}"#);
+		let done = r#"{"app":"geo","action":"deploy","outcome":"succeeded"}"#;
+		let running = r#"{"app":"caddy","action":"redeploy","outcome":"running"}"#;
+		assert_eq!(super::running_event(&events(done)), None);
+		assert_eq!(super::running_event(&events("")), None);
+		let busy = super::running_event(&events(&format!("{done},{running}")));
+		assert_eq!(busy.as_deref(), Some("redeploy of caddy"));
+		assert_eq!(super::running_event("not json"), None);
 	}
 
 	#[test]

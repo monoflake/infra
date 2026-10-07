@@ -1,6 +1,7 @@
 //! A new host, keeper or Caddy reaches one node first. The canary takes such a run as it comes;
 //! every other node holds it and asks the canary, over the tailnet, until the canary's verdict on
-//! it passes, fails, or a deadline does. See spec/architecture/host.md and spec/todo.md.
+//! it passes, fails, or a deadline does. See spec/architecture/host.md, "A new host, keeper or
+//! Caddy reaches the canary first".
 
 use serde::{Deserialize, Serialize};
 use std::future::Future;

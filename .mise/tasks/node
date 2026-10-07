@@ -439,7 +439,7 @@ def canaries_refused(nodes):
 def canary_of(name, nodes):
 	"""What host's and keeper's CANARY say on `name`: `self` on the canary, and on every other node
 	the canary's tailnet IPv4, which they ask its verdict at before taking a new host, keeper or
-	Caddy. See spec/todo.md."""
+	Caddy. See spec/architecture/host.md, "A new host, keeper or Caddy reaches the canary first"."""
 	canary = next(other for other, node in nodes.items() if node.get("canary") is True)
 	return "self" if canary == name else tailnet_ipv4(canary)
 
@@ -584,9 +584,10 @@ def stored_secret(key, dry):
 	return token
 
 
-def relay(where, name, nodes, peers, secrets_, dry):
-	"""Gives the relay peer, and host, what they read on one node. False when the node could not be
-	given it."""
+def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
+	"""Gives the relay peer, and host, what they read on one node, and with `recreate` has keeper
+	start host again when its .env changed, so host reads it. False when the node could not be given
+	it."""
 	slot = list(nodes).index(name)
 	wanted = grants(nodes[name])
 	emulate = emulated(nodes[name])
@@ -600,6 +601,8 @@ def relay(where, name, nodes, peers, secrets_, dry):
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept"
+			+ ("\n  if host's .env changed, ask keeper to recreate host on it, as recreate-host does"
+				if recreate else "")
 		)
 		return True
 	stdin = (
@@ -612,8 +615,15 @@ def relay(where, name, nodes, peers, secrets_, dry):
 		return False
 	states = dict(line.split(" ", 1) for line in answer.splitlines())
 	print(f"node: {name}: relay secret.env {states.get('secret')}")
-	if states.get("host") == "changed":
-		print(f"node: {name}: host's .env changed; host needs recreating to read it")
+	if states.get("host") == "changed" and recreate:
+		print(f"node: {name}: host's .env changed; keeper recreates host to read it")
+		try:
+			host_api.main("recreate-host", [name], nodes)
+		except SystemExit as refused:
+			print(f"node: {name}: recreating host failed: {refused}; run `node recreate-host {name}`")
+			return False
+	elif states.get("host") == "changed":
+		print(f"node: {name}: host's .env changed")
 	elif states.get("host") == "absent":
 		print(f"node: {name}: host has no .env yet; run again after `node host {name}`")
 	return True
@@ -687,7 +697,7 @@ def start_host(name, run, dry):
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
 		)
-		relay(name, name, nodes, peers, shared, dry)
+		relay(name, name, nodes, peers, shared, dry, recreate=False)
 		return
 
 	if ssh(name, "sh -s", PREPARE) != 0:
@@ -719,7 +729,7 @@ def start_host(name, run, dry):
 		sys.exit(f"node: writing host's docker-compose.yml on {name} failed")
 	if not put(name, "/data/apps/host/.env", environment(name, nodes, token, shared["HOST_READ_TOKEN"]), "600"):
 		sys.exit(f"node: writing host's .env on {name} failed")
-	if not relay(name, name, nodes, peers, shared, dry):
+	if not relay(name, name, nodes, peers, shared, dry, recreate=False):
 		sys.exit(f"node: giving the relay its secrets on {name} failed")
 	if ssh(name, "cd /data/apps/host && docker compose up -d") != 0:
 		sys.exit(f"node: starting host on {name} failed")

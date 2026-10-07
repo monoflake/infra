@@ -77,6 +77,37 @@ pub async fn replace_beside(
 	restore: Option<&Path>,
 	beside: Beside<'_>,
 ) -> Result<PathBuf, Error> {
+	putting_back(engine, volumes, members, shape, None, next, current, restore, beside).await
+}
+
+/// `replace`, putting the version before back in `back`, the shape it ran in, should the new one
+/// fail: keeper recreating host on a changed environment, whose old one is the way back. See
+/// spec/architecture/host.md, "host never updates itself; keeper updates host".
+pub async fn replace_back(
+	engine: &Engine,
+	volumes: &Volumes,
+	members: &[&str],
+	shape: &Shape,
+	back: &Shape,
+	next: &Version,
+	current: &Version,
+) -> Result<PathBuf, Error> {
+	let beside = Beside::default();
+	putting_back(engine, volumes, members, shape, Some(back), next, Some(current), None, beside).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn putting_back(
+	engine: &Engine,
+	volumes: &Volumes,
+	members: &[&str],
+	shape: &Shape,
+	back: Option<&Shape>,
+	next: &Version,
+	current: Option<&Version>,
+	restore: Option<&Path>,
+	beside: Beside<'_>,
+) -> Result<PathBuf, Error> {
 	let name = next.manifest.name.as_str();
 	// Every kind, declared or not: a sidecar the next version no longer declares goes too.
 	let sidecars: Vec<String> = Driver::ALL.iter().map(|driver| driver.sidecar_of(name)).collect();
@@ -133,7 +164,7 @@ pub async fn replace_beside(
 			eprintln!("deploy: putting back {}: {reason}", before.name);
 		}
 	}
-	engine.run(current, shape, &volumes.data(name)).await?;
+	engine.run(current, back.unwrap_or(shape), &volumes.data(name)).await?;
 	Err(Error::Unhealthy { reason, logs })
 }
 

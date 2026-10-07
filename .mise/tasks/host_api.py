@@ -29,7 +29,7 @@ REPOSITORY = "monoflake/infra"
 # This machine's end of the forward: a port only it answers on, never an address of anything.
 LOOPBACK = "127.0.0.1"
 
-VERBS = ("apps", "events", "restart", "redeploy", "rollback", "remove", "deploy")
+VERBS = ("apps", "events", "restart", "redeploy", "rollback", "remove", "deploy", "recreate-host")
 
 USAGE = """usage:
   node apps <name> [--json]
@@ -39,8 +39,10 @@ USAGE = """usage:
   node rollback <name> <app> [--with-data]
   node remove <name> <app> [--drop-data]
   node deploy <name> --run RUN_ID [--repository OWNER/NAME] [--app APP]
+  node recreate-host <name>
 each also takes --dry-run, to say what it would ask and ask nothing
 --app deploys that one app of the run, and is how an app rolled out by hand is deployed
+recreate-host has keeper start host again from the image it runs, reading host's .env anew
 
   mise run node apps tyo
   mise run node events rdu geo --limit 20
@@ -245,6 +247,10 @@ def plan(verb, arguments):
 		query = f"?limit={limit}" if limit else ""
 		path = f"/api/apps/{app}/history{query}" if app else f"/api/events{query}"
 		return [(HOST, "GET", path, None)], show_events
+	# keeper replaces host from its own image, so host reads a changed .env; refused while host has
+	# an event running. See apps/deploy/keeper/src/main.rs, `recreate_host`.
+	if verb == "recreate-host":
+		return [(KEEPER, "POST", "/host/redeploy", None)], None
 	if verb in ("restart", "redeploy", "rollback", "remove") and app is None:
 		fail(f"{verb} takes an app\n{USAGE}")
 	if verb == "restart":
@@ -288,7 +294,7 @@ def main(verb, rest, nodes):
 		fail(f"{verb} takes one of {', '.join(nodes)} first\n{USAGE}")
 	name = rest[0]
 	requests, show = plan(verb, rest[1:])
-	needs = any(path.startswith("/api/") for _, _, path, _ in requests)
+	needs = any(path != "/notice" for _, _, path, _ in requests)
 	secret = token(name, dry) if needs else None
 	if dry:
 		print(f"node: would ssh root@{name}, forward to {NETWORK} on it, and ask:")
@@ -302,8 +308,8 @@ def main(verb, rest, nodes):
 	targets = sorted({target for target, *_ in requests})
 	with Forward(name, targets) as forward:
 		for (container, _), method, path, body in requests:
-			# A notice is open on both receivers, so the token goes to host's API alone.
-			carried = secret if path.startswith("/api/") else None
+			# A notice is open on both receivers, so the token goes to everything else alone.
+			carried = secret if path != "/notice" else None
 			envelope = ask(forward.ports[container], method, path, carried, body)
 			data = data_of(envelope, f"{container} {method} {path}")
 			if show is None:

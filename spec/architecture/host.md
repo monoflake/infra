@@ -354,6 +354,19 @@ a run alone, and keeper, once host is replaced -- or put back, if the new one fa
 run on to host marked as done with host. The rest of the run, keeper included, is then deployed by
 the host that run built.
 
+**A changed `.env` reaches host through keeper.** host reads its `.env` only when its container is
+created, so keeper recreates it on request: `POST /host/redeploy`, admitted by the token like its
+upload, replaces host with the version and image it already runs, reading the file on the way.
+`mise run node` asks for it whenever it changes host's `.env`, and `mise run node recreate-host
+<node>` asks by hand. keeper refuses with 409 while host lists an event running, since replacing
+host mid-deploy would leave that app half replaced; the check and the replacement are not one step,
+so a deploy that starts between them is cut short and closed as failed when host starts again. A
+new host that fails its check is put back on the environment the old one ran with, read from its
+container rather than the file, so a bad `.env` cannot take down both. keeper's own copy of the
+file is read only when host redeploys keeper. keeper noticing a changed file by itself was weighed
+and left for later: it would replace host at a moment nobody chose. host reloading itself was
+rejected: a bad `.env` that crashed it would leave nothing outside it to replace it.
+
 **A new host, keeper or Caddy reaches the canary first.** Those three are the door every notice
 comes through, and a door that breaks on all seven nodes at once -- as one did on 2026-10-07 --
 leaves nothing to deliver the fix. So one node, nrt, is the canary: `canary = true` in

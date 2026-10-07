@@ -253,6 +253,16 @@ impl Engine {
 		}))
 	}
 
+	/// The environment the container under `name` was made with, the image's own included, or
+	/// nothing when there is none: what it is put back with when a new one fails.
+	pub async fn env_of(&self, name: &str) -> Result<Option<Vec<String>>, Error> {
+		match self.docker.inspect_container(name, None).await {
+			Ok(inspected) => Ok(Some(inspected.config.and_then(|config| config.env).unwrap_or_default())),
+			Err(error) if absent(&error) => Ok(None),
+			Err(error) => Err(error.into()),
+		}
+	}
+
 	/// When the container under `name` was made, as Docker says it, or nothing when there is none.
 	pub async fn created(&self, name: &str) -> Result<Option<String>, Error> {
 		match self.docker.inspect_container(name, None).await {
