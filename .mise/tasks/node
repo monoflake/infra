@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, start its first host: `node host <name> [--run RUN_ID] [--dry-run]`, or ask its host over the tailnet: `node apps|events|restart|rollback|remove|deploy <name> ...`"
+#MISE description="Set a node up as nodes/ describes it: `node <name>|--all [--address HOST] [--dry-run]`, start its first host: `node host <name> [--run RUN_ID] [--dry-run]`, or ask its host over the tailnet: `node apps|events|restart|redeploy|rollback|remove|deploy <name> ...`"
 """Brings a machine to what nodes/ holds for it: its name, UTC, the files that make Docker wait for
 /data, the egress proxy, the firewall and what the relay peer reads. Run again it changes
 nothing. See spec/architecture/nodes.md.
@@ -8,7 +8,7 @@ nothing. See spec/architecture/nodes.md.
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
 into it".
 
-`node apps|events|restart|rollback|remove|deploy <name>` asks that node's host over SSH; see
+`node apps|events|restart|redeploy|rollback|remove|deploy <name>` asks that node's host over SSH; see
 host_api.py."""
 
 import base64

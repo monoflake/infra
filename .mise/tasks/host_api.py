@@ -29,12 +29,13 @@ REPOSITORY = "monoflake/infra"
 # This machine's end of the forward: a port only it answers on, never an address of anything.
 LOOPBACK = "127.0.0.1"
 
-VERBS = ("apps", "events", "restart", "rollback", "remove", "deploy")
+VERBS = ("apps", "events", "restart", "redeploy", "rollback", "remove", "deploy")
 
 USAGE = """usage:
   node apps <name> [--json]
   node events <name> [app] [--limit N] [--json]
   node restart <name> <app>
+  node redeploy <name> <app>
   node rollback <name> <app> [--with-data]
   node remove <name> <app> [--drop-data]
   node deploy <name> --run RUN_ID [--repository OWNER/NAME]
@@ -43,6 +44,7 @@ each also takes --dry-run, to say what it would ask and ask nothing
   mise run node apps tyo
   mise run node events rdu geo --limit 20
   mise run node restart nrt geo
+  mise run node redeploy tyo deployer
   mise run node rollback buf geo --with-data
   mise run node remove tyo panel
   mise run node deploy hnd --run 12345678 --repository monoflake/platform"""
@@ -241,10 +243,14 @@ def plan(verb, arguments):
 		query = f"?limit={limit}" if limit else ""
 		path = f"/api/apps/{app}/history{query}" if app else f"/api/events{query}"
 		return [(HOST, "GET", path, None)], show_events
-	if verb in ("restart", "rollback", "remove") and app is None:
+	if verb in ("restart", "redeploy", "rollback", "remove") and app is None:
 		fail(f"{verb} takes an app\n{USAGE}")
 	if verb == "restart":
 		return [(HOST, "POST", f"/api/apps/{app}/restart", None)], None
+	# The current version started again, which is what reads its environment anew. See
+	# spec/architecture/host.md, "An app's environment is two files".
+	if verb == "redeploy":
+		return [(HOST, "POST", f"/api/apps/{app}/redeploy", None)], None
 	if verb == "rollback":
 		body = {"with_data": "--with-data" in arguments}
 		return [(HOST, "POST", f"/api/apps/{app}/rollback", body)], None
