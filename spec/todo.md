@@ -23,6 +23,10 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   elsewhere: a run of the platform's thirteen apps cost each small node minutes for the one it
   runs. CI uploads the declarations apart, small, and host fetches only what is placed on it --
   [architecture/host.md](architecture/host.md), "The machine pulls; nothing pushes into it".
+- **An app may ask to be deployed by hand.** `rollout = "manual"` in its `service.toml` and a run's
+  notice deploys nothing of it: the operator deploys it a node at a time with `mise run node deploy`,
+  as the platform's Postgres needs -- standbys first, the primary last -- platform's
+  `spec/architecture/databases.md`, "Upgrades are pinned, reported, and rolled by hand".
 - **A new host, keeper or Caddy reaches one node first.** It goes to a canary node, which must
   answer a notice through Caddy's door and keeper's before the rest take it -- the door that broke
   on all seven nodes at once on 2026-10-07 would have stopped at one. And whatever must be true
