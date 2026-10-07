@@ -21,7 +21,7 @@ change without the service being renamed.
 
 - A name and a label are DNS labels: lowercase letters, digits and hyphens.
 - **A display name is for people, and for nothing else.** `display_name` in `service.toml` is what
-  the console writes for the app -- `IP Geolocation` for `geo` -- in Title Case, spaces allowed,
+  the console writes for the app -- `Geolocation` for `geo` -- in Title Case, spaces allowed,
   and two apps may share one. It never reaches code: a binding, a path, a container, a label and a
   log line all say the name, so a display name changes without anything being renamed. An app
   without one is shown by its name.
