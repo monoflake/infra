@@ -459,7 +459,7 @@ remedy is one request rather than a list of commands.
 ## host has no interface on the node, and a door Caddy keeps
 
 **host has no interface of its own, and no node runs one.** The view of every node is the
-platform's console at the edge -- web's `spec/roadmap.md`, "One console runs the system, and it is
+console at the edge, web's -- web's `spec/roadmap.md`, "One console runs the system, and it is
 this layer's" -- and a node keeps only host's API. The panel that was each node's interface,
 `apps/deploy/panel`, retired on 2026-10-07. host holds the Docker socket and the whole of `/data`,
 so nothing that faces a browser runs beside it.
@@ -480,7 +480,7 @@ so nothing that faces a browser runs beside it.
 
 **The token is taken from the `Authorization` header alone.** **A second token reads and does not
 act**: `HOST_READ_TOKEN`, optional, admits `GET` and is refused anything else -- what the
-platform's console carries, since the token above is root on the machine; see platform's
+console carries, since the token above is root on the machine; see web's
 `spec/architecture/console.md`. From the public, Access stands in front as well.
 
 **Notifications and more nodes -- [nodes.md](nodes.md) -- come after the first version**, which deploys the apps of this
