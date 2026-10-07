@@ -8,8 +8,7 @@ nothing. See spec/architecture/nodes.md.
 which host deploys the rest. See spec/architecture/host.md, "The machine pulls; nothing pushes
 into it".
 
-`node apps|events|restart|redeploy|rollback|remove|deploy <name>` asks that node's host over SSH; see
-host_api.py."""
+`node <verb> <name>` asks that node's host over SSH, for the verbs host_api.py lists."""
 
 import base64
 import json
