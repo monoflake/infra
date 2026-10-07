@@ -8,7 +8,7 @@ const GEO: &str = include_str!("../../fixtures/geo.toml");
 fn reads_the_declaration_geo_ships() {
 	let manifest = Manifest::parse(GEO).unwrap();
 	assert_eq!(manifest.name, "geo");
-	assert_eq!(manifest.data, Some(Data { path: "/state".into() }));
+	assert_eq!(manifest.data, None);
 	let limits = vec![
 		Limit {
 			methods: vec!["GET".into(), "HEAD".into()],
@@ -93,6 +93,7 @@ fn a_container_answers_on_a_port_or_a_socket() {
 		))
 		.unwrap()
 	};
+	assert_eq!(socketed("").data, Some(Data { path: "/data".into() }));
 	assert_eq!(socketed("").check("probe", "rdu"), Ok(()));
 	let mut both = socketed("");
 	both.container.as_mut().unwrap().port = Some(20000);
@@ -398,11 +399,11 @@ fn a_display_name_is_short_trimmed_free_text() {
 			.unwrap()
 	};
 	assert_eq!(shown("").display_name, None);
-	let geo = shown("display_name = \"IP Geolocation\"");
-	assert_eq!(geo.display_name.as_deref(), Some("IP Geolocation"));
+	let geo = shown("display_name = \"Geolocation\"");
+	assert_eq!(geo.display_name.as_deref(), Some("Geolocation"));
 	assert_eq!(geo.check("geo", "rdu"), Ok(()));
 	let back = toml::to_string(&geo).unwrap();
-	assert_eq!(Manifest::parse(&back).unwrap().display_name.as_deref(), Some("IP Geolocation"));
+	assert_eq!(Manifest::parse(&back).unwrap().display_name.as_deref(), Some("Geolocation"));
 	let longest = "É".repeat(DISPLAY_NAME_LENGTH);
 	assert_eq!(shown(&format!("display_name = \"{longest}\"")).check("geo", "rdu"), Ok(()));
 	let too_long = "a".repeat(DISPLAY_NAME_LENGTH + 1);

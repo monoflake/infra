@@ -2,20 +2,17 @@
 # deployed apart from this file, so it carries a version. See spec/architecture/host.md.
 version = 1
 name = "geo"
-placements = ["rdu"]
+placements = ["rdu", "tyo", "nrt", "hnd", "buf", "gvx", "bru"]
 
 [container]
 # The tropics sit at 23.44 degrees; see platform's spec/architecture/services.md, "A service keeps
 # one port".
 port = 23440
 health = "/health"
-# The gazetteer held in memory, about 420 MiB once loaded, and more while it loads.
-memory_mb = 768
-
-# Where GeoLite2 is fetched to, at run time -- unlike /data, which the image ships read-only. See
-# platform's spec/architecture/geo.md, "geo fetches it itself, at run time, once a day".
-[data]
-path = "/state"
+# What geo holds itself, 12 MiB measured after a thousand lookups, and room for the index pages
+# lookups keep warm; the kernel takes those back first. See platform's spec/architecture/geo.md,
+# "Both lookups are files laid out for asking, and the page cache keeps them".
+memory_mb = 64
 
 # The `geo` scope of the API host: public through the gateway, which limits it by address, and
 # unlimited privately and to our own Workers. See platform's spec/architecture/services.md.
