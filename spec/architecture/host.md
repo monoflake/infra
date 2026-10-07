@@ -67,6 +67,32 @@ by side, which is what makes its rollback instant and its releases gapless. Both
 to many users sharing a service. Here they cost two copies of every app, and two processes over one
 SQLite file, to save a pause nobody else sees.
 
+### An app chooses how it is rolled out, and keeping nothing earns a gapless one
+
+That rejection rested on two things: an app's state in a file on its node, and one user. Both are
+going -- the platform's state moves into its database and its buckets, and friends use it -- so
+**`rollout` in `service.toml` names one of three**:
+
+- **`replace`**, the default: everything above. The app stops, its directory is snapshotted and the
+  new version starts on it, a few seconds down, and a failed check puts both back. Every app with
+  state on its node stays here.
+- **`beside`**, for an app that keeps nothing on its node -- no `[data]`, or one it may lose. The new
+  version starts beside the running one under a name of its own and is checked; Caddy's route moves
+  to it, reloaded without dropping a connection; the old one is given a grace period to finish what
+  it is answering, a socket that stays open included, and is stopped. Going back is moving the route
+  back while the old one is still there. Both run at once for a moment, so a node without room for
+  the two falls back to `replace` and says so. Not for an app that publishes a port or answers on a
+  socket, which two containers cannot hold at once.
+- **`manual`**: a run's notice deploys nothing of it, and the operator deploys it a node at a time,
+  as the platform's Postgres needs -- standbys first, the primary last; platform's
+  `spec/architecture/databases.md`, "Upgrades are pinned, reported, and rolled by hand".
+
+A version that runs beside its predecessor runs against the same database, so a change of schema
+that both must survive is made in two steps, the old shape kept until the old version is gone --
+platform's `spec/issues/scheduling.md`, "Schema changes go through the platform". And gapless on one
+node is gapless for the service only when its nodes do not all switch at once, which is what a
+version reaching one node first gives -- [../todo.md](../todo.md). Decided on 2026-10-07.
+
 The snapshot is taken after the container stops, so it is never of a database halfway through a
 write. `/data` is btrfs and **each app's directory is its own subvolume**, so the snapshot is atomic,
 covers exactly that app, and costs nothing until something is written. The directory is therefore
