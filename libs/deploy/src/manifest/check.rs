@@ -2,8 +2,9 @@
 //! spec/architecture/host.md, "What a deployment may ask for is host's decision".
 
 use super::{
-	Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED, RESERVED_LABELS, SHAPES,
-	SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every, is_home,
+	Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
+	RESERVED_LABELS, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron, is_every,
+	is_home,
 };
 use crate::sidecar::Driver;
 
