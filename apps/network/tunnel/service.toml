@@ -3,7 +3,7 @@
 version = 1
 name = "tunnel"
 display_name = "Tunnel"
-placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
+placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf", "sha"]
 
 # Its routes live in Cloudflare's dashboard, and its token in its `secret.env` on the node. host
 # asks its metrics server whether it holds a connection to Cloudflare.

@@ -3,7 +3,7 @@
 version = 1
 name = "host"
 display_name = "Host"
-placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
+placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf", "sha"]
 
 [container]
 # After the machine's address ending in .11.

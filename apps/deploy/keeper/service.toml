@@ -3,7 +3,7 @@
 version = 1
 name = "keeper"
 display_name = "Keeper"
-placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf"]
+placements = ["rdu", "tyo", "nrt", "hnd", "gvx", "bru", "buf", "sha"]
 
 [container]
 # One below host's 11011: the one that stands in front of it.
