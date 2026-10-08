@@ -201,15 +201,6 @@ more -- what the meter reports is the record, and a machine that changes leaves 
 `buf` give a core each. On one core, measured the same day, `tyo` ran a loop in 1.87 s, `buf` in
 2.07 s and `rdu` in 6.39 s, scheduled onto an A53.
 
-**`sha` is one NAT from the public internet, with ports set aside.** Its line has 40 Mbps up, 30 of
-them its own, and 49171 to 49186, TCP and UDP, are forwarded to it from the public address that
-`sh.canmi.icu` follows by DDNS; its router forwards Tailscale's 41641 as well, which is how `rdu`
-reaches it directly. Nothing listens on that range and the node's firewall drops it, as it drops
-every public port -- the range is recorded so a use that needs a public port in China knows it is
-there, and opening one is a change to [`nodes/firewall.nft`](../../nodes/firewall.nft) for `sha`
-alone. Cloudflare is far from it: its tunnel lands in Los Angeles, about 270 ms away, and it
-downloaded from Cloudflare at 84 KB/s on 2026-10-08.
-
 **`gvx` and `bru` have no public IPv4**, inbound or, from late 2026, outbound -- `ipv4 = false` in
 `nodes.toml`. On such a node only one thing needs IPv4: host and keeper asking GitHub for a run and
 downloading what it built. Images arrive as archives, never pulled from a registry, and the tunnel,
