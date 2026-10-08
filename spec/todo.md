@@ -15,6 +15,14 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
 - **`app_of` stops reading a bare `deploy-<app>` as arm64** once no run that still names its
   artifacts that way is fresh enough to deploy -- [architecture/host.md](architecture/host.md),
   "The machine pulls; nothing pushes into it".
+- **`sha`'s path to Cloudflare, measured again on 2026-10-10**, since 84 KB/s down and a tunnel in
+  Los Angeles is far below what China Unicom's Shanghai exit usually gives -- [architecture/nodes.md](architecture/nodes.md),
+  "The nodes". Each combination, to Cloudflare's edge and through `sha`'s own tunnel: cloudflared's
+  `quic` and `http2`, over IPv4 and over IPv6 (`--edge-ip-version`); plain HTTPS, HTTP/2 and HTTP/3 to
+  Cloudflare; the time of day, evening against morning; and, as the fallback, `sha`'s tunnel run on
+  `tyo` and reaching `sha` over TCP through its forwarded ports rather than the tailnet's UDP, whose
+  upload from `sha` measured 0.56 MB/s against TCP's 2.6. The best is kept, and whether `sha` can
+  carry public traffic decided from it.
 - **A health-check stage of its own**, which needs `libs/deploy`'s `replace_beside` to report its
   progress: today `starting` covers the start and the check together --
   [architecture/host.md](architecture/host.md), "Every event is kept, and none is pruned".
