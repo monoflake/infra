@@ -183,7 +183,18 @@ async fn upload(State(keeper): State<Arc<Keeper>>, mut parts: Multipart) -> Resp
 	if !received {
 		return response::failure_with(StatusCode::BAD_REQUEST, "invalid_upload", "No image part");
 	}
-	match from_archive(&keeper, manifest, &archive).await {
+	let started = jiff::Timestamp::now();
+	let placed = from_archive(&keeper, manifest, &archive).await;
+	let done = match &placed {
+		Ok(Placed { image, unchanged: true }) => {
+			let why = "unchanged: the upload is the image host already runs";
+			Done::succeeded(Some(image), Some(why.into()))
+		}
+		Ok(Placed { image, .. }) => Done::succeeded(Some(image), Some("uploaded to keeper".into())),
+		Err(Reply(_, _, message)) => Done::failed(message),
+	};
+	tokio::spawn(report(keeper.token.clone(), "deploy", done, started));
+	match placed {
 		Ok(Placed { image, unchanged }) => response::success(
 			StatusCode::OK,
 			serde_json::json!({ "name": "host", "image": image, "unchanged": unchanged }),
@@ -196,12 +207,93 @@ async fn upload(State(keeper): State<Arc<Keeper>>, mut parts: Multipart) -> Resp
 /// changed `.env` reaches host without a run that built it. See spec/architecture/host.md, "A
 /// changed `.env` reaches host through keeper".
 async fn redeploy_host(State(keeper): State<Arc<Keeper>>) -> Response {
-	match recreate_host(&keeper).await {
+	let started = jiff::Timestamp::now();
+	let recreated = recreate_host(&keeper).await;
+	// A refusal while host was busy did nothing, and leaves no row.
+	if !matches!(&recreated, Err(Reply(StatusCode::CONFLICT, ..))) {
+		let done = match &recreated {
+			Ok(image) => Done::succeeded(Some(image), Some(RECREATED.into())),
+			Err(Reply(_, _, message)) => Done::failed(message),
+		};
+		tokio::spawn(report(keeper.token.clone(), "redeploy", done, started));
+	}
+	match recreated {
 		Ok(image) => {
 			response::success(StatusCode::OK, serde_json::json!({ "name": "host", "image": image }))
 		}
 		Err(Reply(status, code, message)) => response::failure_with(status, code, message),
 	}
+}
+
+/// What a recreate of host is recorded as having done.
+const RECREATED: &str = "recreated from the image it runs, on the node's .env as it now is";
+
+/// How keeper's act on host ended, as host's history records it.
+struct Done {
+	outcome: &'static str,
+	image: Option<String>,
+	detail: Option<String>,
+}
+
+impl Done {
+	fn succeeded(image: Option<&String>, detail: Option<String>) -> Self {
+		Self { outcome: "succeeded", image: image.cloned(), detail }
+	}
+
+	fn failed(message: &str) -> Self {
+		Self { outcome: "failed", image: None, detail: Some(message.to_owned()) }
+	}
+}
+
+/// How long keeper keeps offering host the record: a host put back after a failed one is started
+/// without waiting for its health, so it may take a while to answer.
+const REPORTING: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The row host's history holds for keeper's `action` on host, begun at `started`: sent once the
+/// host that now runs answers, since none answered while it was being replaced. See host's
+/// `keeper_report`.
+async fn report(token: String, action: &'static str, done: Done, started: jiff::Timestamp) {
+	let body = record(action, &done, started, jiff::Timestamp::now()).to_string().into_bytes();
+	let address = host_address();
+	let deadline = tokio::time::Instant::now() + REPORTING;
+	loop {
+		let sent = deploy::http::post_as(
+			&address,
+			&address,
+			"/api/apps/host/history",
+			&token,
+			body.clone(),
+			std::time::Duration::from_secs(5),
+		)
+		.await;
+		match sent {
+			Ok((status, _)) if (200..300).contains(&status) => return,
+			Ok((status, answer)) if status < 500 => {
+				return eprintln!("keeper: host refused the record of its {action}: {status} {answer}");
+			}
+			_ if tokio::time::Instant::now() >= deadline => {
+				return eprintln!("keeper: host took no record of its {action} within a minute");
+			}
+			_ => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
+		}
+	}
+}
+
+/// The record host keeps of keeper's `action`, as host's `keeper_report` reads it.
+fn record(
+	action: &str,
+	done: &Done,
+	started: jiff::Timestamp,
+	finished: jiff::Timestamp,
+) -> serde_json::Value {
+	serde_json::json!({
+		"action": action,
+		"outcome": done.outcome,
+		"image": done.image,
+		"detail": done.detail,
+		"started_at": started.to_string(),
+		"finished_at": finished.to_string(),
+	})
 }
 
 /// Refused while host has an event running, since replacing it mid-deploy would leave that app
@@ -543,6 +635,33 @@ mod tests {
 		changed.display_name = Some("Host again".into());
 		assert!(!super::unchanged(&ids, Some(&running), &changed));
 		assert!(!super::unchanged(&ids, None, &declared));
+	}
+
+	#[test]
+	fn the_record_of_an_act_on_host_is_what_host_reads() {
+		use super::{Done, record};
+		let started: jiff::Timestamp = "2026-10-08T03:00:00Z".parse().unwrap();
+		let finished: jiff::Timestamp = "2026-10-08T03:00:41Z".parse().unwrap();
+		let image = "sha256:aa".to_owned();
+		let done = Done::succeeded(Some(&image), Some(super::RECREATED.into()));
+		let written = record("redeploy", &done, started, finished);
+		assert_eq!(
+			written,
+			serde_json::json!({
+				"action": "redeploy",
+				"outcome": "succeeded",
+				"image": "sha256:aa",
+				"detail": super::RECREATED,
+				"started_at": "2026-10-08T03:00:00Z",
+				"finished_at": "2026-10-08T03:00:41Z",
+			})
+		);
+		let failed =
+			record("deploy", &Done::failed("not healthy within 60 seconds"), started, finished);
+		assert_eq!(
+			(&failed["outcome"], &failed["image"]),
+			(&"failed".into(), &serde_json::Value::Null)
+		);
 	}
 
 	#[test]

@@ -400,6 +400,13 @@ a run alone, and keeper, once host is replaced -- or put back, if the new one fa
 run on to host marked as done with host. The rest of the run, keeper included, is then deployed by
 the host that run built.
 
+**What keeper does to host is in host's history.** A recreate, and an upload through keeper,
+reach host once it answers again as one finished row, app `host`, source `{"kind": "keeper"}`,
+with keeper's start and end and its detail -- `POST /api/apps/host/history`, the full token alone,
+on `app-host` and not through the door. It cannot be a running row, host being down for the part
+that matters; keeper retries for a minute, so a row is lost only when no host answers at all. A
+host replaced by a CI run is reported as it was, by the run.
+
 **A changed `.env` reaches host through keeper.** host reads its `.env` only when its container is
 created, so keeper recreates it on request: `POST /host/redeploy`, admitted by the token like its
 upload, replaces host with the version and image it already runs, reading the file on the way.

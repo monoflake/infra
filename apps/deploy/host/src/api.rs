@@ -25,7 +25,7 @@ pub fn router(host: Arc<Host>) -> Router {
 	let guarded = Router::new()
 		.route("/apps", get(apps))
 		.route("/apps/{name}", get(app).post(upload).delete(remove).layer(DefaultBodyLimit::disable()))
-		.route("/apps/{name}/history", get(history))
+		.route("/apps/{name}/history", get(history).post(keeper_report))
 		.route("/apps/{name}/health", get(app_health))
 		.route("/events", get(events))
 		.route("/runs/{owner}/{name}/{run}", get(run_verdict))
@@ -417,6 +417,70 @@ async fn history(
 	Query(page): Query<Page>,
 ) -> Response {
 	paged(&host.store, Some(&name), &page)
+}
+
+/// What keeper did to host, as keeper reports it once host answers again.
+#[derive(Deserialize)]
+struct Report {
+	action: Action,
+	outcome: crate::store::Outcome,
+	#[serde(default)]
+	image: Option<String>,
+	#[serde(default)]
+	detail: Option<String>,
+	started_at: String,
+	finished_at: String,
+}
+
+/// keeper's record of recreating host, or of taking an upload of it: a finished row in host's own
+/// history, since host was down while it happened. The full token alone, as any write; host's own
+/// rows alone. See keeper's `report`.
+async fn keeper_report(
+	State(host): State<Arc<Host>>,
+	Path(name): Path<String>,
+	Json(report): Json<Report>,
+) -> Response {
+	if name != "host" {
+		return failed(StatusCode::FORBIDDEN, "invalid_target", "keeper records host's events alone");
+	}
+	match reported(&host.store, report) {
+		Ok(id) => response::success(StatusCode::OK, serde_json::json!({ "id": id })),
+		Err(Reported::Invalid(why)) => failed(StatusCode::BAD_REQUEST, "invalid_body", why),
+		Err(Reported::Store(error)) => {
+			failed(StatusCode::INTERNAL_SERVER_ERROR, "store_unavailable", error)
+		}
+	}
+}
+
+enum Reported {
+	Invalid(&'static str),
+	Store(crate::store::Error),
+}
+
+/// `report` recorded, when it is a deploy or a redeploy that ended, with times that are times.
+fn reported(store: &Store, report: Report) -> Result<i64, Reported> {
+	use crate::store::Outcome;
+	if !matches!(report.action, Action::Deploy | Action::Redeploy) {
+		return Err(Reported::Invalid("keeper reports a deploy or a redeploy of host"));
+	}
+	if !matches!(report.outcome, Outcome::Succeeded | Outcome::Failed) {
+		return Err(Reported::Invalid("keeper reports what ended, succeeded or failed"));
+	}
+	let times = [&report.started_at, &report.finished_at];
+	if times.iter().any(|time| time.parse::<jiff::Timestamp>().is_err()) {
+		return Err(Reported::Invalid("started_at and finished_at are RFC 3339 times"));
+	}
+	let event = crate::store::Finished {
+		app: "host".into(),
+		action: report.action,
+		source: Source::keeper(),
+		image: report.image,
+		outcome: report.outcome,
+		detail: report.detail,
+		started_at: report.started_at,
+		finished_at: report.finished_at,
+	};
+	store.recorded(&event).map_err(Reported::Store)
 }
 
 /// Every app's events on this node.
@@ -1076,6 +1140,51 @@ mod tests {
 			(&"probe".into(), &true.into(), &200.into())
 		);
 		assert_eq!(data["body"]["status"], "success");
+	}
+
+	#[tokio::test]
+	async fn keeper_records_what_it_did_to_host_with_the_full_token_alone() {
+		use http_body_util::BodyExt;
+		use tower::ServiceExt;
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let post = |token: &str, app: &str, body: serde_json::Value| {
+			axum::http::Request::post(format!("/api/apps/{app}/history"))
+				.header("authorization", format!("Bearer {token}"))
+				.header("content-type", "application/json")
+				.body(axum::body::Body::from(body.to_string()))
+				.unwrap()
+		};
+		let recreated = serde_json::json!({
+			"action": "redeploy",
+			"outcome": "succeeded",
+			"image": "sha256:aa",
+			"detail": "recreated from the image it runs, on the node's .env as it now is",
+			"started_at": "2026-10-08T03:00:00Z",
+			"finished_at": "2026-10-08T03:00:41Z",
+		});
+		let answer = |request| async { super::router(host.clone()).oneshot(request).await.unwrap() };
+		assert_eq!(answer(post("reader", "host", recreated.clone())).await.status(), 403);
+		assert_eq!(answer(post("full", "geo", recreated.clone())).await.status(), 403);
+		let taken = answer(post("full", "host", recreated.clone())).await;
+		assert_eq!(taken.status(), 200);
+		let body = taken.into_body().collect().await.unwrap().to_bytes();
+		assert!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["data"]["id"].is_i64());
+		let [event] = host.store.events(Some("host"), None, 10).unwrap().try_into().unwrap();
+		let json = serde_json::to_value(&event).unwrap();
+		assert_eq!(json["source"], serde_json::json!({ "kind": "keeper" }));
+		assert_eq!((&json["action"], &json["outcome"]), (&"redeploy".into(), &"succeeded".into()));
+		assert_eq!(
+			(&json["started_at"], &json["finished_at"]),
+			(&recreated["started_at"], &recreated["finished_at"])
+		);
+		assert_eq!((&json["image"], &json["detail"]), (&recreated["image"], &recreated["detail"]));
+		// Only what ended, a deploy or a redeploy, at times that are times.
+		for (field, value) in [("action", "rollback"), ("outcome", "running"), ("started_at", "soon")] {
+			let mut bad = recreated.clone();
+			bad[field] = value.into();
+			assert_eq!(answer(post("full", "host", bad)).await.status(), 400, "{field}");
+		}
 	}
 
 	#[test]

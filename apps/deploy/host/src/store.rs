@@ -129,6 +129,11 @@ impl Source {
 		Self { kind: "upload".into(), ..Self::default() }
 	}
 
+	/// keeper, acting on host: recreating it, or taking an upload of it.
+	pub fn keeper() -> Self {
+		Self { kind: "keeper".into(), ..Self::default() }
+	}
+
 	pub fn run(run: u64, commit: Option<String>) -> Self {
 		Self { kind: "run".into(), run: Some(run), commit, repository: None }
 	}
@@ -146,6 +151,18 @@ pub const BUILT_AGAIN: &str = "built it again, and is the one this node runs";
 /// How a deploy passed over because its image is the one the app already runs, with the same
 /// declaration, begins its reason; as good as deployed. See rollout/version.rs, `unchanged`.
 pub const UNCHANGED: &str = "unchanged: ";
+
+/// An event that is over, recorded whole.
+pub struct Finished {
+	pub app: String,
+	pub action: Action,
+	pub source: Source,
+	pub image: Option<String>,
+	pub outcome: Outcome,
+	pub detail: Option<String>,
+	pub started_at: String,
+	pub finished_at: String,
+}
 
 /// One app's deploy row from a CI run.
 #[derive(Debug, Clone, PartialEq)]
@@ -505,6 +522,28 @@ impl Store {
 			"INSERT INTO events (app, action, source, image, outcome, started_at, finished_at, stage)
 			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
 			params![app, text(&action)?, text(source)?, image, text(&outcome)?, started, finished, stage],
+		)?;
+		Ok(connection.last_insert_rowid())
+	}
+
+	/// Record an event that is over already, with the times it began and ended: what keeper did to
+	/// host while host was down to record it.
+	pub fn recorded(&self, event: &Finished) -> Result<i64, Error> {
+		let connection = lock(&self.history);
+		connection.execute(
+			"INSERT INTO events (app, action, source, image, outcome, detail, started_at, finished_at,
+			stage) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+			params![
+				event.app,
+				text(&event.action)?,
+				text(&event.source)?,
+				event.image,
+				text(&event.outcome)?,
+				event.detail,
+				event.started_at,
+				event.finished_at,
+				text(&Stage::Starting)?
+			],
 		)?;
 		Ok(connection.last_insert_rowid())
 	}

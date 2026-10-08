@@ -78,6 +78,28 @@ pub async fn get_as(
 	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
 }
 
+/// POST a JSON body to `address` as the name `host`, with `token` as the bearer, for the status and
+/// the body: keeper telling host what it did to host.
+pub async fn post_as(
+	address: &str,
+	host: &str,
+	path: &str,
+	token: &str,
+	body: Vec<u8>,
+	within: Duration,
+) -> Result<(u16, String), Error> {
+	let attempt = async {
+		let stream = tokio::net::TcpStream::connect(address).await.map_err(Error::Connect)?;
+		let request = Request::post(path)
+			.header("host", host)
+			.header("authorization", format!("Bearer {token}"))
+			.header("content-type", "application/json")
+			.body(Full::new(Bytes::from(body)))?;
+		send(stream, request).await
+	};
+	tokio::time::timeout(within, attempt).await.map_err(|_| Error::Timeout(within))?
+}
+
 /// The status an app with no network answers `path` with on its socket.
 pub async fn status_unix(socket: &Path, path: &str) -> Result<u16, Error> {
 	Ok(get_unix(socket, path).await?.0)
