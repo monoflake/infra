@@ -179,7 +179,8 @@ kernel accepting router advertisements with `accept_ra = 1`.
 **A node may set which family its tunnel uses**, `tunnel_ip_version`, `auto`, `4` or `6`, written
 as `TUNNEL_EDGE_IP_VERSION` beside the protocol. `auto`, the default, resolves to IPv4 on `edge`,
 since an address from a ULA sorts after IPv4, and falls back from IPv6 to IPv4 only; `6` is IPv6
-alone.
+alone. `sha` runs `6` since 2026-10-08: on IPv4 its QUIC to the edge timed out now and then, on
+IPv6 all four connections registered at once, and the hook's notices reached it by VPC.
 
 **A node may set its tunnel's protocol**, `tunnel_protocol` in `nodes.toml`, one of `quic`,
 `http2` or `auto`: `mise run node` writes it as `TUNNEL_TRANSPORT_PROTOCOL` into the tunnel's

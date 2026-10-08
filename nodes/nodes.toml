@@ -64,3 +64,4 @@ domain = "int"
 system = "debian"
 emulate = ["arm64"]
 grants = ["database:peer", "quorum:peer"]
+tunnel_ip_version = 6
