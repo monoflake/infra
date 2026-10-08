@@ -158,6 +158,12 @@ artifact. It hands the run as one keeper has
 already passed on: a run that rebuilt host makes host wait for keeper, and a fresh node has none
 until host deploys it.
 
+**A new node's VPC service is bound wherever the nodes are listed.** The platform's `hook` and
+`gateway` and web's console each bind every node's, and the platform's deployer admits a binding
+from outside its organization only once `WORKER_RESOURCES` on the deployer's node gives it -- so
+`sha`'s console binding was refused on 2026-10-08, and the console counted eight nodes heard of
+seven, until its id was added there for `canmi21/web`.
+
 **The tunnel comes first.** host deploys the tunnel in the run it is handed, and a first deploy
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.
