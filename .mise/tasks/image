@@ -21,6 +21,13 @@ while [ "$dir" != / ] && ! grep -qs '^node = "' "$dir/mise.toml"; do dir="$(dirn
 node="$(sed -n 's/^node = "\(.*\)"/\1/p' "$dir/mise.toml" 2>/dev/null || true)"
 [ -n "$node" ] || { echo "image: no node in a mise.toml above $ROOT" >&2; exit 1; }
 
+# The rust image each build stage starts from, by digest for the toolchain, so a tag pushed again
+# cannot change what a build compiles with. A new toolchain fails here until its digest is added.
+case "$version" in
+	1.99.0) rust_image="rust:1.99.0-slim-trixie@sha256:24e632c09342c20abf8312cf4f61430a911c01ed3a5e4c02b87292b1c39c5273" ;;
+	*) echo "image: no rust image pinned for $version; add its digest here" >&2; exit 1 ;;
+esac
+
 app="$(find "$ROOT/apps" -mindepth 2 -maxdepth 2 -type d -name "$name" | head -n 1)"
 [ -n "$app" ] || { echo "image: no app named $name" >&2; exit 1; }
 
@@ -38,7 +45,11 @@ done
 secret=()
 [ -z "$forward" ] || secret=(--secret id=sccache,env=SCCACHE_FORWARD)
 
+# The same source builds the same image: every time in it, file and image alike, is the epoch, a
+# fixed one so an app rebuilt unchanged by a later commit is unchanged too. host deploys nothing
+# for an image it already runs. See spec/architecture/host.md.
 SCCACHE_FORWARD="$forward" docker buildx build --platform "${PLATFORM:-linux/arm64}" \
 	--file "$app/Dockerfile" ${secret[@]+"${secret[@]}"} \
-	--build-arg "RUST_VERSION=$version" --build-arg "NODE_VERSION=$node" \
-	--tag "$name:local" --output "type=docker,dest=$archive" "$ROOT"
+	--build-arg "RUST_VERSION=$version" --build-arg "RUST_IMAGE=$rust_image" \
+	--build-arg "NODE_VERSION=$node" --build-arg SOURCE_DATE_EPOCH=0 \
+	--tag "$name:local" --output "type=docker,dest=$archive,rewrite-timestamp=true" "$ROOT"

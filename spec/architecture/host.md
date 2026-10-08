@@ -253,6 +253,16 @@ process needs, not what the files it handles weigh.
 
 ### An image is built for speed, and for any node of its architecture
 
+**The same source builds the same image, byte for byte**, so a node can tell an unchanged rebuild
+from a change. `.mise/tasks/image` builds with `SOURCE_DATE_EPOCH=0` -- fixed, not the commit's
+time, so an app rebuilt by a later commit without changing comes out the same -- and rewrites every
+layer's timestamps to it; the Rust image is pinned by digest for each toolchain, and a toolchain
+with none pinned stops the build; and rustc runs through sccache by a wrapper of its own, since
+sccache wrapping the C compile of a crate such as mimalloc would drop the epoch and stamp the wall
+clock into the binary. Measured on 2026-10-08: two clean builds of each of infra's images came out
+identical. A machine whose cache mounts predate this holds objects stamped with an older time, and
+its local builds differ from CI's until `docker buildx prune --filter type=exec.cachemount`.
+
 Every Rust program's image compiles its binary with the `container` profile in this repository's `Cargo.toml`, as in the platform's: full
 optimization with fat LTO and one codegen unit, no debug information and no symbols. Speed is
 chosen over size because a server pays for its binary on every request and for its bytes never;
