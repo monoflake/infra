@@ -120,7 +120,9 @@ channel that accepts one has no boundary to enforce.
 So the direction is reversed, and trust is moved off the channel.
 
 - CI builds only the apps a push changed -- `.mise/tasks/deployable` reads the change against the
-  crate graph -- once for `linux/arm64` and once for `linux/amd64`, each natively on a runner of that
+  crate graph, and a change to `Cargo.lock` or the root `Cargo.toml` rebuilds only the apps whose
+  resolved dependencies it moved, read from the lockfile and checked with `cargo tree` for what each
+  image compiles, every image when it cannot tell -- once for `linux/arm64` and once for `linux/amd64`, each natively on a runner of that
   architecture and each as its image archive beside its `service.toml`, and uploads
   them as artifacts of that workflow run. **Nothing is published**: no release, no package, no
   registry. This is one repository holding many apps, and a publishing ritual per app is exactly the
