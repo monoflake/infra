@@ -43,11 +43,10 @@ pub async fn from_run(
 		eprintln!("host: run {run}: it built nothing for `{app}`");
 		return true;
 	}
-	// What this node settled of the run already -- deployed, or passed over by an earlier notice or a
-	// catch-up -- is not done again. See catch_up.rs.
+	// What this node settled of the run already is not done again, unless the operator asks for it.
 	let settled = host.store.settled(run).unwrap_or_default();
-	let artifacts: Vec<_> =
-		artifacts.into_iter().filter(|artifact| !settled.contains(&artifact.app)).collect();
+	let overridden = by_hand || only.is_some();
+	let artifacts = unsettled(artifacts, &settled, overridden, |artifact| artifact.app.as_str());
 	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
 		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
 		// Not taken, so the notice keeper sends afterwards is.
@@ -181,6 +180,20 @@ pub async fn from_run(
 	whole
 }
 
+/// `artifacts` but the apps `settled` of the run already, every one when the operator `overridden`
+/// the record by deploying by hand. See catch_up.rs.
+fn unsettled<T>(
+	artifacts: Vec<T>,
+	settled: &std::collections::HashSet<String>,
+	overridden: bool,
+	app: impl Fn(&T) -> &str,
+) -> Vec<T> {
+	if overridden {
+		return artifacts;
+	}
+	artifacts.into_iter().filter(|artifact| !settled.contains(app(artifact))).collect()
+}
+
 /// A run held for the canary on this node.
 struct Held<'a> {
 	host: &'a Arc<Host>,
@@ -292,7 +305,60 @@ fn caddy_first<T>(mut artifacts: Vec<T>, app: impl Fn(&T) -> &str) -> Vec<T> {
 
 #[cfg(test)]
 mod tests {
-	use super::{by_hand, caddy_first, unplaced};
+	use super::{by_hand, caddy_first, unplaced, unsettled};
+	use crate::store::{Action, Outcome, Source, Stage, Store};
+
+	/// A store holding run 42's rows for `rows`, each an app, how it ended and why.
+	fn recorded(rows: &[(&str, Outcome, Option<&str>)]) -> (tempfile::TempDir, Store) {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let source = Source::run(42, None).of("monoflake/platform");
+		for (app, outcome, detail) in rows {
+			let running = Outcome::Running;
+			let id = store.record(app, Action::Deploy, &source, None, running, Some(Stage::Admitting));
+			if *outcome != Outcome::Running {
+				store.finish(id.unwrap(), *outcome, None, *detail).unwrap();
+			}
+		}
+		(directory, store)
+	}
+
+	#[test]
+	fn a_manual_app_passed_over_by_the_hook_is_then_deployed_by_hand() {
+		let why = by_hand("rdu", "monoflake/platform", 42, "ledger");
+		let (_directory, store) = recorded(&[("ledger", Outcome::Skipped, Some(&why))]);
+		let settled = store.settled(42).unwrap();
+		assert!(settled.is_empty());
+		assert_eq!(unsettled(vec!["ledger"], &settled, true, |app| app), ["ledger"]);
+		assert_eq!(unsettled(vec!["ledger"], &settled, false, |app| app), ["ledger"]);
+	}
+
+	#[test]
+	fn held_waiting_placed_elsewhere_or_failed_settles_nothing() {
+		let (_directory, store) = recorded(&[
+			("geo", Outcome::Skipped, Some(super::HELD)),
+			("relay", Outcome::Skipped, Some("placed on tyo, not on this node")),
+			("cron", Outcome::Failed, Some("not healthy within 60 seconds")),
+			("apt", Outcome::Running, None),
+		]);
+		assert!(store.settled(42).unwrap().is_empty());
+	}
+
+	#[test]
+	fn a_notice_taken_twice_does_not_deploy_again_what_it_deployed() {
+		let again = format!("run 50 {}", crate::store::BUILT_AGAIN);
+		let (_directory, store) = recorded(&[
+			("geo", Outcome::Succeeded, None),
+			("cron", Outcome::Skipped, Some(&again)),
+			("relay", Outcome::Failed, Some("not healthy")),
+		]);
+		let settled = store.settled(42).unwrap();
+		assert_eq!(settled, ["geo".to_owned(), "cron".to_owned()].into());
+		let taken = unsettled(vec!["geo", "cron", "relay"], &settled, false, |app| app);
+		assert_eq!(taken, ["relay"]);
+		// By hand, the operator deploys what they name whatever the record says.
+		assert_eq!(unsettled(vec!["geo"], &settled, true, |app| app), ["geo"]);
+	}
 
 	#[test]
 	fn a_deploy_passed_over_for_the_operator_says_how_they_deploy_it() {

@@ -146,7 +146,7 @@ async fn take(host: &Arc<Host>, repository: &str, missed: &Missed) {
 /// Record `app` of `run` as passed over for `newer`, so the run is settled for it.
 pub(super) fn pass_over(store: &store::Store, repository: &str, run: u64, app: &str, newer: u64) {
 	let source = Source::run(run, None).of(repository);
-	let why = format!("run {newer} built it again, and is the one this node runs");
+	let why = format!("run {newer} {}", store::BUILT_AGAIN);
 	let recorded = store
 		.record(app, Action::Deploy, &source, None, Outcome::Skipped, Some(Stage::Admitting))
 		.and_then(|id| store.finish(id, Outcome::Skipped, None, Some(&why)));

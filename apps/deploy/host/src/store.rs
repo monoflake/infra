@@ -139,6 +139,10 @@ impl Source {
 	}
 }
 
+/// How a deploy passed over for a newer run's build of the same app ends its reason, after `run N`;
+/// the one pass-over that settles an app. See rollout/catch_up.rs.
+pub const BUILT_AGAIN: &str = "built it again, and is the one this node runs";
+
 /// One app's deploy row from a CI run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Taken {
@@ -626,18 +630,20 @@ impl Store {
 			.collect()
 	}
 
-	/// The apps whose deploy from `run` is settled -- deployed, or passed over -- and so is not done
-	/// again when the run is taken again. A failed one is, as a notice taken again retries it.
+	/// The apps whose deploy from `run` is settled, and so is not done again when a notice of the
+	/// run is taken again: deployed, or passed over because a newer run built it again. A row passed
+	/// over for any other reason -- rolled out by hand, held, placed elsewhere -- or one that failed
+	/// settles nothing, so the operator, or the notice taken again, still deploys it.
 	pub fn settled(&self, run: u64) -> Result<std::collections::HashSet<String>, Error> {
-		let settled = [Outcome::Succeeded, Outcome::Skipped];
-		Ok(
-			self
-				.taken()?
-				.into_iter()
-				.filter(|taken| taken.run == run && settled.contains(&taken.outcome))
-				.map(|taken| taken.app)
-				.collect(),
-		)
+		let connection = lock(&self.history);
+		let mut statement = connection.prepare(
+			"SELECT app FROM events WHERE action = 'deploy' AND json_extract(source, '$.kind') = 'run'
+			AND json_extract(source, '$.run') = ?1
+			AND (outcome = 'succeeded' OR (outcome = 'skipped' AND detail LIKE '% ' || ?2))",
+		)?;
+		let run = i64::try_from(run).unwrap_or(i64::MAX);
+		let rows = statement.query_map(params![run, BUILT_AGAIN], |row| row.get::<_, String>(0))?;
+		Ok(rows.collect::<Result<_, _>>()?)
 	}
 
 	/// The snapshot taken before `image` was deployed: what the directory held before the version
