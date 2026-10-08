@@ -20,6 +20,9 @@ pub enum Role {
 	/// Talks to itself on every other node: its port published on the machine, and host's own
 	/// network joined.
 	Peer,
+	/// Answers every app on its node: sandboxed on its own network, publishing nothing, and joined
+	/// by host to every app's network.
+	Proxy,
 }
 
 impl Role {
@@ -29,6 +32,7 @@ impl Role {
 			"steward" => Role::Steward,
 			"reporter" => Role::Reporter,
 			"peer" => Role::Peer,
+			"proxy" => Role::Proxy,
 			other => Role::Driver(Driver::named(other)?),
 		})
 	}
@@ -122,6 +126,11 @@ mod tests {
 		assert_eq!(Grants::parse("cron:root"), Err("cron:root".into()));
 		assert_eq!(Grants::parse(":scheduler"), Err(":scheduler".into()));
 		assert!(Grants::parse("relay:peer").unwrap().allows("relay", Role::Peer));
+		let proxy = Grants::parse("pgproxy:proxy").unwrap();
+		assert_eq!(proxy.holder(Role::Proxy), Some("pgproxy"));
+		let asked = declared("pgproxy", "[shape]\nkind = \"proxy\"");
+		assert_eq!(proxy.shape_of(&asked), Ok(Some(Role::Proxy)));
+		assert!(Grants::default().shape_of(&asked).is_err());
 	}
 
 	#[test]

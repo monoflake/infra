@@ -585,3 +585,17 @@ fn a_peer_publishes_several_ports_in_place_of_one() {
 	let cron = shaped("kind = \"scheduler\"\nports = [2379]");
 	assert_eq!(cron.check("geo", "rdu"), Err(Invalid::ShapePort("scheduler".into())));
 }
+
+#[test]
+fn a_proxy_answers_on_a_port_and_publishes_nothing() {
+	let shaped = |shape: &str| Manifest::parse(&format!("{GEO}\n[shape]\n{shape}\n")).unwrap();
+	assert_eq!(shaped("kind = \"proxy\"").check("geo", "rdu"), Ok(()));
+	let published = shaped("kind = \"proxy\"\nports = [5432]");
+	assert_eq!(published.check("geo", "rdu"), Err(Invalid::ShapePort("proxy".into())));
+	let mut socketed = shaped("kind = \"proxy\"\n[data]\npath = \"/data\"");
+	let container = socketed.container.as_mut().unwrap();
+	(container.port, container.socket) = (None, Some("proxy.sock".into()));
+	socketed.api = None;
+	assert_eq!(socketed.check("geo", "rdu"), Err(Invalid::ProxyPort));
+	assert_eq!(shaped("kind = \"proxy\"").rollout, Rollout::Replace);
+}

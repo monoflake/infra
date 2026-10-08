@@ -5,9 +5,10 @@ use super::Error;
 use super::Outcome;
 use super::admit::{RESOLVER, admit, admitted, runnable};
 use super::beside::{self, Plan};
-use super::route::{attach, route};
+use super::route::{attach, proxy_everywhere, proxy_into, route};
 use super::shape::{bound, shape_of};
 use super::tell::{tell_cron, tell_telemetry};
+use crate::grants::Role;
 use crate::sidecars::{self, drive};
 use crate::store::{Action, Deployed, Source, Stage};
 use crate::{Host, store};
@@ -48,6 +49,11 @@ pub(super) async fn run_version(
 	// The tunnel has no network of its own for host to ask its health on; host stands on the edge.
 	if matches!(shape, Shape::Tunnel { .. }) {
 		host.engine.join(deploy::engine::EDGE_NETWORK, &members[..1], false).await?;
+	}
+	// The node's proxy is on an app's network from before the app first starts.
+	if shape.networked() {
+		host.engine.network(&next.manifest.name, &members).await?;
+		proxy_into(host, &next.manifest.name).await;
 	}
 	// A rollback with data puts a directory back, which only a replacement does.
 	if next.manifest.rollout == Rollout::Beside && restore.is_none() {
@@ -166,6 +172,11 @@ pub(super) async fn settle(
 	name: String,
 	image: String,
 ) -> Result<Outcome, Error> {
+	// A new proxy is a new container, on none of the apps' networks yet, and is in the state only
+	// now that its deploy is recorded.
+	if host.config.grants.holder(Role::Proxy) == Some(name.as_str()) {
+		proxy_everywhere(host).await;
+	}
 	let routed = route(host).await.map_err(|error| error.to_string());
 	collect(host).await?;
 	tell_cron(host).await;

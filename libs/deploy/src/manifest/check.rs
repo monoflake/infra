@@ -67,8 +67,12 @@ pub enum Invalid {
 	Schedule(String),
 	#[error("`{0}` declares `[[schedules]]` but answers through neither `[api]` nor a socket")]
 	Unscheduled(String),
-	#[error("`[shape]` asks for `{0}`, and a role is one of scheduler, steward, reporter and peer")]
+	#[error(
+		"`[shape]` asks for `{0}`, and a role is one of scheduler, steward, reporter, peer and proxy"
+	)]
 	Shape(String),
+	#[error("a proxy answers the apps it joins on a port, never on a socket")]
+	ProxyPort,
 	#[error("`[shape]` names a port for a peer alone, and `{0}` is not one")]
 	ShapePort(String),
 	#[error("a peer's `[shape]` port {0} is 0 or its container's own, which it publishes anyway")]
@@ -240,6 +244,9 @@ impl Manifest {
 			&& shape.kind != "peer"
 		{
 			return Err(Invalid::ShapePort(shape.kind.clone()));
+		}
+		if self.shape.as_ref().is_some_and(|shape| shape.kind == "proxy") && container.port.is_none() {
+			return Err(Invalid::ProxyPort);
 		}
 		if let Some(port) = self.shape.as_ref().and_then(|shape| shape.port) {
 			if self.shape.as_ref().is_some_and(|shape| shape.ports.is_some()) {

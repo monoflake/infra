@@ -183,10 +183,11 @@ GRANTS = {
 	"debian": ("relay:peer", "cron:scheduler", "apt:steward"),
 	"alpine": ("relay:peer", "cron:scheduler", "apk:steward"),
 }
-# What a core node grants besides: the platform's Postgres, a peer publishing 5432, and the objects
-# driver, whose sidecars the platform's apps there run. See platform's
+# What a core node grants besides: the platform's Postgres, a peer publishing 5432; the objects
+# driver, whose sidecars the platform's apps there run; and etcd, `quorum`, a peer the database's
+# failover agrees through. See platform's
 # spec/architecture/databases.md, "Where it runs, and which one writes", and objects.md.
-CORE_GRANTS = ("database:peer", "objects:objects")
+CORE_GRANTS = ("database:peer", "objects:objects", "quorum:peer")
 # The private scopes host's Caddy sends to the gateway; see spec/architecture/host.md.
 PRIVATE_SCOPES = "ledger"
 # The secrets every node shares, in secrets.json under these names.

@@ -36,7 +36,10 @@ of `NODE` in host's `.env`.
   provider's code** from the registry in platform's `spec/architecture/gateway.md`, "Providers are
   short codes, registered here" -- `oci`, `az`, `rkn`, and `int` for the hardware in the house -- and
   shown to a person by the provider's name; a second account at a provider is the code and a
-  number, `oci-2`.
+  number, `oci-2`. **`int` is the one code that is not an account**: a self-hosted machine fails
+  with its own house, and the author never keeps two in one place, so every `int` node is a failure
+  domain of its own, `rdu` and `sha` two, and whatever counts domains counts each `int` node apart.
+  Decided on 2026-10-08.
 - **Capacity is measured, never declared**: the architecture, memory and disk are what `meter`
   reports ([meter.md](meter.md)). A machine given more memory changes no record, and a declared size
   would be wrong from that day.
@@ -166,7 +169,7 @@ machine. The token GitHub's Actions are read with is shared, since it can only r
 
 What each node is declared to be is [`nodes/nodes.toml`](../../nodes/nodes.toml), and nowhere else.
 
-**What the machines were seen to be on 2026-10-07**, a snapshot to choose placements by and nothing
+**What the machines were seen to be on 2026-10-07**, `sha` on 2026-10-08, a snapshot to choose placements by and nothing
 more -- what the meter reports is the record, and a machine that changes leaves this stale:
 
 | Node  | Account     | CPU                                    | vCPUs | Instruction set                                      | Memory  |
@@ -178,6 +181,7 @@ more -- what the meter reports is the record, and a machine that changes leaves 
 | `bru` | Azure       | AMD EPYC 7763, Zen 3                   | 2     | x86-64-v3, AES-NI, SHA-NI                            | 898 MiB |
 | `buf` | RackNerd    | Intel Xeon E5-2690 v4, Broadwell       | 2     | x86-64-v3, AES-NI, no SHA-NI; emulates arm64         | 3.3 GiB |
 | `rdu` | Self-hosted | Arm Cortex-A72 and A53, big and little | 8     | ARMv8.0: CRC32, AES, SHA-2, no LSE atomics           | 7.7 GiB |
+| `sha` | Self-hosted | AMD Ryzen 5 5600G, Zen 3               | 4     | x86-64-v3, AES-NI, SHA-NI                            | 15 GiB  |
 
 `nrt` and `hnd` show two vCPUs that are one core's two threads, as `bru`'s are; `tyo`, `gvx` and
 `buf` give a core each. On one core, measured the same day, `tyo` ran a loop in 1.87 s, `buf` in

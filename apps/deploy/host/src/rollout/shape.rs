@@ -81,6 +81,8 @@ pub(super) fn shape_named(
 		(_, Some(Role::Steward)) => Shape::Steward { env },
 		(_, Some(Role::Reporter)) => Shape::Reporter { env, meter: placed.meter },
 		(_, Some(Role::Peer)) => Shape::Peer { env },
+		// Sandboxed as any app; what it is given is every app's network, by `route::proxy_into`.
+		(_, Some(Role::Proxy)) => Shape::Sandboxed { env },
 		_ => Shape::Sandboxed { env },
 	})
 }

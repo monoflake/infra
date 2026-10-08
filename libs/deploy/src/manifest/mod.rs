@@ -40,7 +40,7 @@ const RESERVED_LABELS: [&str; 2] = ["infra", "cms"];
 pub const OWN: [&str; 6] = ["host", "keeper", "meter", "caddy", "tunnel", "resolver"];
 
 /// The roles an app may ask for beyond a sandbox, by the word its `[shape]` names each with.
-pub const SHAPES: [&str; 4] = ["scheduler", "steward", "reporter", "peer"];
+pub const SHAPES: [&str; 5] = ["scheduler", "steward", "reporter", "peer", "proxy"];
 
 /// The placement that is Cloudflare's Workers rather than a node. Cloudflare deploys it, so no host
 /// ever runs what is placed there. See platform's spec/architecture/services.md, "A Workers

@@ -159,6 +159,8 @@ mod tests {
 		assert!(!admits("panel", None));
 		assert!(admits("relay", Some(Role::Peer)));
 		assert!(!admits("relay", None));
+		// A proxy joins every app's network, and host's own is not among them.
+		assert!(!admits("pgproxy", Some(Role::Proxy)));
 		assert!(!admits("geo", None));
 		assert!(!admits("telemetry", Some(Role::Reporter)));
 		// Infra's own are shaped by name, so a peer granted to one does not make it a peer.

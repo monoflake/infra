@@ -57,3 +57,8 @@ tier = "home"
 domain = "int"
 system = "debian"
 lan = "end0"
+
+[sha]
+tier = "home"
+domain = "int"
+system = "debian"
