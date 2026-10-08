@@ -5,9 +5,9 @@
 # trusted like the tailnet, for the one node in the house. `ipv4 = false` marks a node with no IPv4
 # to rely on, which reaches GitHub through the others' egress proxies. `core` marks the three nodes
 # that hold the control plane, `canary = true` the one a new host, keeper or Caddy reaches first.
-# `emulate = ["arm64"]` on an x86 Debian node runs arm64 images there by emulation. A node is
-# appended, never inserted: its position is its slot in a weekly spread, platform's
-# spec/architecture/cron.md.
+# `emulate = ["arm64"]` on an x86 Debian node runs arm64 images there by emulation, and `grants`
+# adds `app:role` pairs to host's GRANTS after its family's and the core's. A node is appended,
+# never inserted: its position is its slot in a weekly spread, platform's spec/architecture/cron.md.
 
 [tyo]
 core = true
@@ -62,3 +62,5 @@ lan = "end0"
 tier = "home"
 domain = "int"
 system = "debian"
+emulate = ["arm64"]
+grants = ["database:peer"]

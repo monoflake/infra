@@ -136,6 +136,11 @@ or it would put the provider's back at every boot. The first run names the machi
 since it is not yet called by its name. A name set by hand in Tailscale's console outranks the one the machine
 asks for, so a node renamed there keeps its old tailnet name until the console says otherwise.
 
+**A node may name grants of its own**, `grants = ["app:role", …]` in `nodes.toml`, which `mise run
+node` adds to host's `GRANTS` after its family's and, on a core node, the core's, each pair once;
+each is checked as `app:role` with a role host knows before any machine is asked. It is how a node
+outside the core runs what the core is granted, as `sha` runs a database standby.
+
 **The firewall goes up under a guard.** Unless a second ssh session, opened after it, proves the
 machine is still reachable, the machine takes the table down by itself a minute later, so a rule that
 locks the session out undoes itself.

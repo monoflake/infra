@@ -471,11 +471,31 @@ def canary_of(name, nodes):
 	return "self" if canary == name else tailnet_ipv4(canary)
 
 
+# The roles host grants, as `Role::parse` in apps/deploy/host/src/grants.rs reads them; a test there
+# holds every node's `grants` to it.
+ROLES = ("scheduler", "steward", "reporter", "peer", "proxy", "objects", "postgres")
+APP = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def grants_refused(name, node):
+	"""Why `node`'s own `grants` cannot be, or None when each is `app:role` with a role host knows."""
+	granted = node.get("grants")
+	if granted is None:
+		return None
+	if not isinstance(granted, list) or not all(isinstance(pair, str) for pair in granted):
+		return f"{name}: grants is a list of app:role pairs, not {granted!r}"
+	for pair in granted:
+		app, _, role = pair.partition(":")
+		if not APP.fullmatch(app) or role not in ROLES:
+			return f"{name}: grants pair {pair!r} is not app:role with a role of {', '.join(ROLES)}"
+	return None
+
+
 def load_nodes():
-	"""nodes.toml, every node's `domain` and `emulate`, and the one canary, checked before anything
-	is asked of a machine."""
+	"""nodes.toml, every node's `domain`, `emulate` and `grants`, and the one canary, checked before
+	anything is asked of a machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
-	checks = (domain_refused, emulation_refused)
+	checks = (domain_refused, emulation_refused, grants_refused)
 	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
 	refused += canaries_refused(nodes)
 	if refused:
@@ -484,8 +504,11 @@ def load_nodes():
 
 
 def grants(node):
-	"""The pairs host's `GRANTS` names on `node`: its family's, and the core's on a core node."""
-	return " ".join(GRANTS[node["system"]] + (CORE_GRANTS if node.get("core") else ()))
+	"""The pairs host's `GRANTS` names on `node`: its family's, the core's on a core node, then its
+	own `grants`, each pair once."""
+	core = CORE_GRANTS if node.get("core") else ()
+	pairs = GRANTS[node["system"]] + core + tuple(node.get("grants", ()))
+	return " ".join(dict.fromkeys(pairs))
 
 
 def relay_peers(nodes):

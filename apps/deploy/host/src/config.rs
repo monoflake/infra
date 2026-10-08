@@ -222,6 +222,17 @@ mod tests {
 	}
 
 	#[test]
+	fn every_nodes_own_grants_are_pairs_host_takes() {
+		let nodes: toml::Table = include_str!("../../../../nodes/nodes.toml").parse().unwrap();
+		for (name, node) in nodes {
+			let Some(grants) = node.get("grants") else { continue };
+			let pairs: Vec<&str> =
+				grants.as_array().unwrap().iter().map(|pair| pair.as_str().unwrap()).collect();
+			assert!(crate::grants::Grants::parse(&pairs.join(" ")).is_ok(), "{name}: {pairs:?}");
+		}
+	}
+
+	#[test]
 	fn every_node_emulates_only_what_host_takes() {
 		let nodes: toml::Table = include_str!("../../../../nodes/nodes.toml").parse().unwrap();
 		for (name, node) in nodes {
