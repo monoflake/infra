@@ -14,6 +14,7 @@ mod images;
 mod inspect;
 mod node;
 mod resolver;
+mod restarts;
 mod rollout;
 mod sidecars;
 mod store;
@@ -172,6 +173,8 @@ async fn main() -> anyhow::Result<()> {
 	tokio::spawn(images::run(host.clone()));
 	// Runs whose notice never arrived, at start and every 15 minutes. See rollout/catch_up.rs.
 	tokio::spawn(rollout::catch_up(host.clone()));
+	// Failing exits of an app declaring a restart limit, counted. See restarts.rs.
+	tokio::spawn(restarts::watch(host.clone()));
 
 	let telling = host.clone();
 	tokio::spawn(async move {

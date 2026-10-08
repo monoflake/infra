@@ -454,9 +454,9 @@ and one broken node instead of seven is still the gain.
   passes on that one path, a GET, from `100.64.0.0/10`; anything else asked of it is a 404, and no
   other node's Caddy changes. Only the canary's host answers the route. tailscale masquerades what
   it forwards from the tailnet into a container unless told not to, which would show Caddy the
-  edge network's gateway rather than the asking node, so the canary's setup runs `tailscale set
-  --snat-subnet-routes=false`; nrt advertises no routes, so nothing else changes, and no other
-  node is touched, its peers' database and relay seeing sources as they do today.
+  edge network's gateway rather than the asking node, so the canary's setup runs
+  `tailscale set --snat-subnet-routes=false`; nrt advertises no routes, so nothing else changes,
+  and no other node is touched, its peers' database and relay seeing sources as they do today.
 - **The verdict is `passed`, `pending` or `failed`.** It is `failed` when nrt failed or passed over
   one of the apps for that run, and `pending` while one is not yet taken, still deploying, or not
   answering its health. It is `passed` once each is deployed by that run and keeper and Caddy
@@ -772,6 +772,25 @@ the record once it restarts.
 restart policy does that -- and through a deploy: while it is held, a CI run that built it is recorded
 as skipped rather than started. A start runs the version it was stopped at; a redeploy, a rollback
 or an upload is a choice to run something, and ends the hold.
+
+**A restart limit holds an app that keeps failing.** Under `[container]`,
+`restart = { attempts = 3, within = "10m" }` declares one, both values the app's own: `attempts`
+from 1 to 100, `within` written as `every` is, both or neither, and an app without it is restarted
+however often it fails. Docker's
+`unless-stopped` policy still restarts the app, so it comes back while host is down. host watches
+Docker's events for the container ending on its own -- a `die` no `kill` asked for -- with a code
+other than 0, and records each as an `exit` in the app's history, which is how the count outlives
+host's own restart and how the console shows the crashes. Once the last `attempts` of them since
+the app was last deployed, started or restarted all fall within `within`, host holds the app and
+stops it, recording a stop that says `held: 3 failing exits within 10m`. dockerd may start it once
+more before host's stop lands; the hold stands either way and ends as any other does, with a start,
+a redeploy or a deploy by hand. An exit while host is down is not seen, and one while the app is
+held is not counted.
+
+**A container goes with its anonymous volumes.** Every removal, host's and keeper's, asks Docker for
+`v`, which takes the volumes an image's `VOLUME` made for that container and nothing else: a named
+volume and the bind of the app's directory stay. Docker gives each new container fresh ones, so
+nothing in them would ever be read again; what an app keeps belongs in its directory.
 
 ### An image is kept while something could run it
 

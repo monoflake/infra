@@ -299,3 +299,28 @@ fn a_granted_identity_is_the_containers_hostname_and_its_mac_on_its_own_network(
 		None
 	);
 }
+
+#[test]
+fn a_container_goes_with_its_anonymous_volumes_and_by_force() {
+	let options = removal();
+	assert!(options.v && options.force && !options.link);
+}
+
+#[test]
+fn a_kill_is_an_ask_and_a_die_carries_its_exit_code() {
+	use bollard::models::{EventActor, EventMessage};
+	let message = |action: &str, attributes: &[(&str, &str)]| EventMessage {
+		action: Some(action.into()),
+		actor: Some(EventActor {
+			id: Some("0123".into()),
+			attributes: Some(attributes.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect()),
+		}),
+		..EventMessage::default()
+	};
+	let died = message("die", &[("name", "qq"), ("exitCode", "137"), ("image", "host/qq")]);
+	assert_eq!(Ending::of(&died), Some(Ending::Died { name: "qq".into(), code: 137 }));
+	let asked = message("kill", &[("name", "qq"), ("signal", "15")]);
+	assert_eq!(Ending::of(&asked), Some(Ending::Asked("qq".into())));
+	assert_eq!(Ending::of(&message("start", &[("name", "qq")])), None);
+	assert_eq!(Ending::of(&message("die", &[("name", "qq")])), None);
+}

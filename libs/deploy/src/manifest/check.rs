@@ -2,9 +2,9 @@
 //! spec/architecture/host.md, "What a deployment may ask for is host's decision".
 
 use super::{
-	ARCHES, Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
-	RESERVED_LABELS, Rollout, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron,
-	is_every, is_home, is_local_mac,
+	ARCHES, ATTEMPTS, Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS,
+	RESERVED, RESERVED_LABELS, Rollout, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket,
+	is_cron, is_every, is_home, is_local_mac,
 };
 use crate::sidecar::Driver;
 
@@ -110,6 +110,13 @@ pub enum Invalid {
 	Mac(String),
 	#[error("`rollout = \"beside\"` runs two versions at once, and one MAC cannot be on both")]
 	BesideMac,
+	#[error(
+		"`restart` takes `attempts` from {low} to {high} and `within` as a whole number above 0 of \
+		 seconds, minutes or hours (`30s`, `10m`, `1h`); `{0}` is not",
+		low = ATTEMPTS.start(),
+		high = ATTEMPTS.end()
+	)]
+	Restart(String),
 	#[error("`arch` asks for `{0}`, and the one architecture an app may ask for is arm64")]
 	Arch(String),
 	#[error("`{0}` is too long to run beside itself under a name of its own, at most 63 characters")]
@@ -189,6 +196,11 @@ impl Manifest {
 		}
 		if let Some(mac) = container.mac_address.as_ref().filter(|mac| !is_local_mac(mac)) {
 			return Err(Invalid::Mac(mac.clone()));
+		}
+		if let Some(limit) = &container.restart
+			&& (!ATTEMPTS.contains(&limit.attempts) || limit.window().is_none())
+		{
+			return Err(Invalid::Restart(format!("{} within {}", limit.attempts, limit.within)));
 		}
 		if self.data.as_ref().is_some_and(|data| !data.path.starts_with('/')) {
 			return Err(Invalid::DataPath);

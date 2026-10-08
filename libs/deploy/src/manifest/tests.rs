@@ -659,3 +659,30 @@ fn a_mac_cannot_be_rolled_out_beside_itself_and_a_hostname_can() {
 	);
 	assert_eq!(declared("hostname = \"geo\"").check("geo", "rdu"), Ok(()));
 }
+
+#[test]
+fn a_restart_limit_counts_attempts_within_a_duration() {
+	let limited = identified("restart = { attempts = 3, within = \"10m\" }");
+	assert_eq!(limited.check("geo", "rdu"), Ok(()));
+	let limit = limited.container.as_ref().unwrap().restart.clone().unwrap();
+	assert_eq!((limit.attempts, limit.window()), (3, Some(std::time::Duration::from_secs(600))));
+	let back = Manifest::parse(&toml::to_string(&limited).unwrap()).unwrap();
+	assert_eq!(back.container, limited.container);
+	assert_eq!(duration_of("1h"), Some(std::time::Duration::from_secs(3600)));
+	assert_eq!(duration_of("45s"), Some(std::time::Duration::from_secs(45)));
+	for (attempts, within) in [(0, "10m"), (101, "10m"), (3, "10"), (3, "0m"), (3, "1d"), (3, "")] {
+		let refused =
+			identified(&format!("restart = {{ attempts = {attempts}, within = \"{within}\" }}"));
+		assert_eq!(
+			refused.check("geo", "rdu"),
+			Err(Invalid::Restart(format!("{attempts} within {within}")))
+		);
+	}
+	let error = Invalid::Restart("0 within 10m".into()).to_string();
+	assert!(error.contains("from 1 to 100") && error.contains("`10m`"), "{error}");
+	// Both, or neither.
+	let half =
+		GEO.replacen("health = \"/health\"", "health = \"/health\"\nrestart = { attempts = 3 }", 1);
+	assert!(matches!(Manifest::parse(&half), Err(Invalid::Malformed(_))));
+	assert_eq!(Manifest::parse(GEO).unwrap().container.unwrap().restart, None);
+}

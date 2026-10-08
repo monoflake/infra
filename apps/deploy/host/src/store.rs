@@ -69,6 +69,8 @@ pub enum Action {
 	Restart,
 	/// Taken off the node by hand; its history stays.
 	Remove,
+	/// Its container exited failing, under a restart limit; see restarts.rs.
+	Exit,
 }
 
 /// How an event ended, or that it has not yet.
@@ -132,6 +134,11 @@ impl Source {
 	/// keeper, acting on host: recreating it, or taking an upload of it.
 	pub fn keeper() -> Self {
 		Self { kind: "keeper".into(), ..Self::default() }
+	}
+
+	/// host, acting on what Docker tells it: an app's failing exit, and the hold that ends them.
+	pub fn host() -> Self {
+		Self { kind: "host".into(), ..Self::default() }
 	}
 
 	pub fn run(run: u64, commit: Option<String>) -> Self {
@@ -207,6 +214,8 @@ pub enum Error {
 	TakenByApp(String),
 	#[error("`{0}` is already a route")]
 	TakenByRoute(String),
+	#[error("a stored time is unreadable: {0}")]
+	Time(String),
 }
 
 const APPS: &str = "CREATE TABLE IF NOT EXISTS apps (
@@ -588,6 +597,51 @@ impl Store {
 			],
 		)?;
 		Ok(connection.last_insert_rowid())
+	}
+
+	/// Record that `app`'s container exited with `code` at `at`, a failure over already.
+	pub fn exited(
+		&self,
+		app: &str,
+		image: Option<&str>,
+		code: i64,
+		at: jiff::Timestamp,
+	) -> Result<i64, Error> {
+		let connection = lock(&self.history);
+		connection.execute(
+			"INSERT INTO events (app, action, source, image, outcome, detail, started_at, finished_at)
+			VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+			params![
+				app,
+				text(&Action::Exit)?,
+				text(&Source::host())?,
+				image,
+				text(&Outcome::Failed)?,
+				format!("exited with code {code}"),
+				at.to_string()
+			],
+		)?;
+		Ok(connection.last_insert_rowid())
+	}
+
+	/// When `app`'s last `count` failing exits were, the newest first, of those since it was last
+	/// deployed, started or restarted: what its restart limit counts. See restarts.rs.
+	pub fn exits(&self, app: &str, count: u32) -> Result<Vec<jiff::Timestamp>, Error> {
+		let connection = lock(&self.history);
+		let mut statement = connection.prepare(
+			"SELECT started_at FROM events WHERE app = ?1 AND action = 'exit'
+			AND id > COALESCE((SELECT MAX(id) FROM events WHERE app = ?1 AND outcome = 'succeeded'
+				AND action IN ('deploy', 'redeploy', 'rollback', 'rollback_with_data', 'start', 'restart')),
+				0)
+			ORDER BY id DESC LIMIT ?2",
+		)?;
+		let rows = statement.query_map(params![app, count], |row| row.get::<_, String>(0))?;
+		rows
+			.map(|row| {
+				let at = row?;
+				at.parse().map_err(|_| Error::Time(at))
+			})
+			.collect()
 	}
 
 	/// Move an open event on to `stage`, naming its image once it is known.

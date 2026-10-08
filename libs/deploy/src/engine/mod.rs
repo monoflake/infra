@@ -22,11 +22,14 @@ pub(crate) use shape::{SCRATCH, bind, sandbox};
 use crate::manifest::Manifest;
 use crate::sidecar::Sidecar;
 use bollard::Docker;
-use bollard::models::{EndpointSettings, NetworkConnectRequest, NetworkCreateRequest};
+use bollard::models::{
+	EndpointSettings, EventMessage, NetworkConnectRequest, NetworkCreateRequest,
+};
 use bollard::query_parameters::{
-	CreateContainerOptionsBuilder, ImportImageOptionsBuilder, ListImagesOptionsBuilder,
-	RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder, RenameContainerOptionsBuilder,
-	RestartContainerOptionsBuilder, StopContainerOptionsBuilder, TagImageOptionsBuilder,
+	CreateContainerOptionsBuilder, EventsOptionsBuilder, ImportImageOptionsBuilder,
+	ListImagesOptionsBuilder, RemoveContainerOptionsBuilder, RemoveImageOptionsBuilder,
+	RenameContainerOptionsBuilder, RestartContainerOptionsBuilder, StopContainerOptionsBuilder,
+	TagImageOptionsBuilder,
 };
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -49,6 +52,13 @@ pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 /// `STOP_GRACE` in whole seconds, as Docker's stop and restart take it.
 fn stop_seconds() -> i32 {
 	i32::try_from(STOP_GRACE.as_secs()).unwrap_or(i32::MAX)
+}
+
+/// How every container host or keeper takes away is removed: forced, and with its anonymous
+/// volumes, the ones an image's `VOLUME` makes for each container and nothing else would ever
+/// remove. Docker's `v` takes those alone: a named volume, and a bind of an app's directory, stay.
+pub(crate) fn removal() -> bollard::query_parameters::RemoveContainerOptions {
+	RemoveContainerOptionsBuilder::new().force(true).v(true).build()
 }
 
 /// `STOP_GRACE` as a created container's `StopTimeout`, what the daemon gives it when it stops.
@@ -79,6 +89,37 @@ pub enum Error {
 	Directory { path: String, source: std::io::Error },
 	#[error("the machine has neither {DBUS_SOCKET} nor {}, so the steward has no door", APK_DOOR.0)]
 	NoDoor,
+}
+
+/// A container ending, as the daemon tells it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ending {
+	/// Something asked it to stop: the `kill` every stop and restart sends before its process ends.
+	Asked(String),
+	/// Its process ended with `code`: a `die`, however it came to.
+	Died { name: String, code: i64 },
+}
+
+impl Ending {
+	pub(crate) fn of(message: &EventMessage) -> Option<Self> {
+		let attributes = message.actor.as_ref()?.attributes.as_ref()?;
+		let name = attributes.get("name")?.clone();
+		match message.action.as_deref()? {
+			"kill" => Some(Self::Asked(name)),
+			"die" => Some(Self::Died { name, code: attributes.get("exitCode")?.parse().ok()? }),
+			_ => None,
+		}
+	}
+}
+
+/// Containers' endings, one at a time, as `Engine::endings` reads them.
+pub struct Endings(std::pin::Pin<Box<dyn Stream<Item = Result<Ending, Error>> + Send>>);
+
+impl Endings {
+	/// The next one, or none once the daemon has closed the stream.
+	pub async fn next(&mut self) -> Option<Result<Ending, Error>> {
+		self.0.next().await
+	}
 }
 
 /// A 404 from Docker: the thing asked about does not exist.
@@ -281,14 +322,22 @@ impl Engine {
 			Err(error) if absent(&error) => return Ok(()),
 			Err(error) => return Err(error.into()),
 		}
-		match self
-			.docker
-			.remove_container(name, Some(RemoveContainerOptionsBuilder::new().force(true).build()))
-			.await
-		{
+		match self.docker.remove_container(name, Some(removal())).await {
 			Err(error) if !absent(&error) => Err(error.into()),
 			_ => Ok(()),
 		}
+	}
+
+	/// Every container's ending from now on, until the daemon closes the stream.
+	pub fn endings(&self) -> Endings {
+		let filters = HashMap::from([("type", vec!["container"]), ("event", vec!["kill", "die"])]);
+		let options = EventsOptionsBuilder::new().filters(&filters).build();
+		Endings(Box::pin(self.docker.events(Some(options)).filter_map(|message| async move {
+			match message {
+				Ok(message) => Ending::of(&message).map(Ok),
+				Err(error) => Some(Err(error.into())),
+			}
+		})))
 	}
 
 	/// Set the running container's memory ceiling to `mb`, swap equal to it as `run` sets it, without

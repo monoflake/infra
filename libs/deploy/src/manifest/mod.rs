@@ -210,6 +210,42 @@ pub struct Container {
 	/// card holds it: in place of the one Docker draws for each container.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub mac_address: Option<String>,
+	/// How many failing exits within how long host lets Docker restart it before holding it
+	/// stopped. Without it, Docker restarts it however often it fails. See
+	/// spec/architecture/host.md.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub restart: Option<RestartLimit>,
+}
+
+/// `attempts` failing exits within `within`, a duration as `every` is written: `10m`, `1h`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RestartLimit {
+	pub attempts: u32,
+	pub within: String,
+}
+
+/// The failing exits a restart limit may count to.
+pub const ATTEMPTS: RangeInclusive<u32> = 1..=100;
+
+impl RestartLimit {
+	/// `within` as a duration, when it is one.
+	pub fn window(&self) -> Option<std::time::Duration> {
+		duration_of(&self.within)
+	}
+}
+
+/// A positive count of seconds, minutes or hours, `30s`, `10m`, `6h`, as a duration.
+pub fn duration_of(expr: &str) -> Option<std::time::Duration> {
+	if !is_every(expr) {
+		return None;
+	}
+	let (count, unit) = expr.split_at(expr.len() - 1);
+	let seconds = match unit {
+		"s" => 1,
+		"m" => 60,
+		_ => 3600,
+	};
+	count.parse::<u64>().ok()?.checked_mul(seconds).map(std::time::Duration::from_secs)
 }
 
 impl Container {
