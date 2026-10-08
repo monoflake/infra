@@ -40,6 +40,8 @@ pub enum Error {
 	Resolver(#[from] caddy::Error),
 	#[error("port {port} is already `{holder}`'s")]
 	PortTaken { port: u16, holder: String },
+	#[error("MAC address {mac} is already `{holder}`'s on this node")]
+	MacTaken { mac: String, holder: String },
 	#[error(transparent)]
 	Store(#[from] store::Error),
 	#[error(transparent)]

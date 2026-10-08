@@ -216,7 +216,10 @@ own in `[shape]` has that one published instead, and its declared port stays on 
 to check, which is how the platform's Postgres publishes 5432 and keeps its keeper's HTTP to itself;
 `ports = [...]` names several in place of `port`, one program serving the tailnet on more than one,
 as Postgres beside Patroni's REST and etcd's client and peer ports, and host refuses a peer whose
-port another peer on the node already publishes before it stops anything; the proxy, which every
+port another peer on the node already publishes before it stops anything; the identity, a hostname
+and a MAC address of its own that every version keeps, for a program that takes a new machine for a
+new device -- `hostname` and `mac_address` under `[container]`, the MAC unicast and locally
+administered, so no real card holds it, set on the app's own network alone; the proxy, which every
 app reaches by name -- sandboxed on a network of its own, answering on a port and publishing none,
 and joined by host to every app's network but infra's own, before each new version of an app
 starts, when host starts, and to all of them once the proxy itself is deployed, a join that fails
@@ -224,7 +227,9 @@ being logged rather than failing the deploy; the driver of a kind, whose image
 every sidecar of that kind runs; and a claim on hostnames, which Caddy routes and the resolver
 answers. An app asks in its `service.toml` --
 `[shape] kind = "scheduler"`, `[driver] provides = "objects"` -- and the node's `.env` grants, in
-`GRANTS`, as `app:role` pairs: `cron:scheduler objects:objects`.
+`GRANTS`, as `app:role` pairs: `cron:scheduler objects:objects`. An app with a MAC of its own is
+never rolled out beside itself, since two versions would share it on one network, and host refuses,
+before stopping anything, one whose MAC another app on the node already holds.
 
 **Both keys, always.** A declaration ships with an image CI built, and anything that reaches CI
 could write one, so asking alone grants nothing: an app that asks for a role the node does not

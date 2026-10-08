@@ -247,8 +247,14 @@ pub(super) fn container_body(
 	published: &[u16],
 ) -> ContainerCreateBody {
 	let recorded = serde_json::to_string(version).unwrap_or_default();
+	// An identity the node granted: a hostname of its own, and a MAC on its own network that every
+	// version keeps. See spec/architecture/host.md.
+	let declared = version.manifest.container.as_ref();
+	let hostname = declared.and_then(|container| container.hostname.clone());
+	let mac_address = declared.and_then(|container| container.mac_address.clone());
 	ContainerCreateBody {
 		image: Some(version.image.clone()),
+		hostname,
 		stop_timeout: stop_timeout(),
 		env: Some(env),
 		// The steward runs as root, so systemd's D-Bus API lets it start a unit, and the door's
@@ -274,7 +280,10 @@ pub(super) fn container_body(
 			Shape::Tunnel { address, address6, .. } => {
 				Some((EDGE_NETWORK.to_owned(), tunnel_endpoint(address, address6.as_deref())))
 			}
-			_ => Some((network_of(&version.manifest.name), EndpointSettings::default())),
+			_ => {
+				let own = EndpointSettings { mac_address, ..Default::default() };
+				Some((network_of(&version.manifest.name), own))
+			}
 		}
 		.map(|(network, settings)| bollard::models::NetworkingConfig {
 			endpoints_config: Some(HashMap::from([(network, settings)])),

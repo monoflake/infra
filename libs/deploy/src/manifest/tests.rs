@@ -599,3 +599,63 @@ fn a_proxy_answers_on_a_port_and_publishes_nothing() {
 	assert_eq!(socketed.check("geo", "rdu"), Err(Invalid::ProxyPort));
 	assert_eq!(shaped("kind = \"proxy\"").rollout, Rollout::Replace);
 }
+
+/// geo's declaration with `lines` added to its `[container]`.
+fn identified(lines: &str) -> Manifest {
+	Manifest::parse(&GEO.replacen(
+		"health = \"/health\"",
+		&format!("health = \"/health\"\n{lines}"),
+		1,
+	))
+	.unwrap()
+}
+
+#[test]
+fn an_identity_is_a_label_and_a_locally_administered_unicast_mac() {
+	let both = identified("hostname = \"qq\"\nmac_address = \"02:42:ac:11:00:2a\"");
+	assert_eq!(both.check("geo", "rdu"), Ok(()));
+	let container = both.container.as_ref().unwrap();
+	assert!(container.asks_identity());
+	assert_eq!(
+		(container.hostname.as_deref(), container.mac_address.as_deref()),
+		(Some("qq"), Some("02:42:ac:11:00:2a"))
+	);
+	let back = Manifest::parse(&toml::to_string(&both).unwrap()).unwrap();
+	assert_eq!(back.container, both.container);
+	assert!(!Manifest::parse(GEO).unwrap().container.unwrap().asks_identity());
+	// Upper case is the same address; each octet is two digits.
+	assert_eq!(identified("mac_address = \"0A:00:00:00:00:01\"").check("geo", "rdu"), Ok(()));
+	for bad in ["QQ", "-qq", "qq.home", ""] {
+		let named = identified(&format!("hostname = \"{bad}\""));
+		assert_eq!(named.check("geo", "rdu"), Err(Invalid::Hostname(bad.into())), "{bad}");
+	}
+	// Global (a manufacturer's), multicast, the wrong length or not hex.
+	for bad in [
+		"00:1a:2b:3c:4d:5e",
+		"03:00:00:00:00:01",
+		"02:42:ac:11:00",
+		"02:42:ac:11:00:2a:01",
+		"02:42:ac:11:00:zz",
+		"2:42:ac:11:00:2a",
+	] {
+		let addressed = identified(&format!("mac_address = \"{bad}\""));
+		assert_eq!(addressed.check("geo", "rdu"), Err(Invalid::Mac(bad.into())), "{bad}");
+	}
+}
+
+#[test]
+fn a_mac_cannot_be_rolled_out_beside_itself_and_a_hostname_can() {
+	let declared = |container: &str| {
+		let text = GEO.replacen("version = 1", "version = 1\nrollout = \"beside\"", 1).replacen(
+			"health = \"/health\"",
+			&format!("health = \"/health\"\n{container}"),
+			1,
+		);
+		Manifest::parse(&text).unwrap()
+	};
+	assert_eq!(
+		declared("mac_address = \"02:00:00:00:00:01\"").check("geo", "rdu"),
+		Err(Invalid::BesideMac)
+	);
+	assert_eq!(declared("hostname = \"geo\"").check("geo", "rdu"), Ok(()));
+}

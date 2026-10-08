@@ -337,6 +337,50 @@ mod tests {
 		assert!(host.store.app("database").unwrap().is_none());
 	}
 
+	#[tokio::test]
+	async fn an_identity_is_refused_ungranted_or_when_another_app_holds_its_mac() {
+		use crate::store::Deployed;
+		let qq = |mac: &str| {
+			deploy::Manifest::parse(&format!(
+				"version = 1\nname = \"qq\"\nplacements = [\"rdu\"]\n[container]\nport = 23000\n\
+				 health = \"/health\"\nhostname = \"qq\"\nmac_address = \"{mac}\"\n"
+			))
+			.unwrap()
+		};
+		let directory = tempfile::tempdir().unwrap();
+		let archive = directory.path().join("never-read.tar");
+		let ungranted = crate::testing(directory.path());
+		let refused =
+			super::from_archive(&ungranted, "qq", qq("02:00:00:00:00:01"), &archive, &Source::upload())
+				.await;
+		assert!(matches!(refused, Err(Error::Refused(_))), "{refused:?}");
+
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing_with(directory.path(), |config| {
+			config.grants = crate::grants::Grants::parse("qq:identity").unwrap();
+		});
+		let mut other = qq("02:00:00:00:00:01");
+		other.name = "phone".into();
+		other.container.as_mut().unwrap().port = Some(23001);
+		let held = Deployed {
+			manifest: other,
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		host.store.put_app(&held).unwrap();
+		let taken =
+			super::from_archive(&host, "qq", qq("02:00:00:00:00:01"), &archive, &Source::upload()).await;
+		let Err(error @ Error::MacTaken { .. }) = taken else { panic!("{taken:?}") };
+		assert_eq!(
+			error.to_string(),
+			"MAC address 02:00:00:00:00:01 is already `phone`'s on this node"
+		);
+		let [event] = host.store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Failed, Some(Stage::Admitting)));
+	}
+
 	#[test]
 	fn a_node_runs_arm64_natively_or_emulated_and_its_own_always() {
 		let directory = tempfile::tempdir().unwrap();

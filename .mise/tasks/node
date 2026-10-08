@@ -560,7 +560,7 @@ def canary_of(name, nodes):
 
 # The roles host grants, as `Role::parse` in apps/deploy/host/src/grants.rs reads them; a test there
 # holds every node's `grants` to it.
-ROLES = ("scheduler", "steward", "reporter", "peer", "proxy", "objects", "postgres")
+ROLES = ("scheduler", "steward", "reporter", "peer", "proxy", "identity", "objects", "postgres")
 APP = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
 
 

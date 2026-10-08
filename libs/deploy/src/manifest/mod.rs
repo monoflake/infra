@@ -201,9 +201,34 @@ pub struct Container {
 	pub health_timeout: Option<u64>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub memory_mb: Option<u32>,
+	/// The hostname its container answers to, in place of the id Docker gives each one; with
+	/// `mac_address`, an identity kept across versions, for a program that takes a new machine for
+	/// a new device. Asked of the node's `identity` grant. See spec/architecture/host.md.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub hostname: Option<String>,
+	/// Its interface's MAC address on its own network, unicast and locally administered so no real
+	/// card holds it: in place of the one Docker draws for each container.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub mac_address: Option<String>,
 }
 
-/// Reached as a scope of the API host.
+impl Container {
+	/// Whether it asks for an identity of its own, which the node's `identity` grant gives.
+	pub fn asks_identity(&self) -> bool {
+		self.hostname.is_some() || self.mac_address.is_some()
+	}
+}
+
+/// Whether `mac` is six hex octets, unicast and locally administered: the first octet's lowest bit
+/// clear and its next set, the range no manufacturer assigns.
+pub fn is_local_mac(mac: &str) -> bool {
+	let octets: Vec<&str> = mac.split(':').collect();
+	let hex = |octet: &&str| octet.len() == 2 && octet.bytes().all(|byte| byte.is_ascii_hexdigit());
+	if octets.len() != 6 || !octets.iter().all(hex) {
+		return false;
+	}
+	u8::from_str_radix(octets[0], 16).is_ok_and(|first| first & 0b01 == 0 && first & 0b10 != 0)
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Api {
 	#[serde(default)]

@@ -23,6 +23,9 @@ pub enum Role {
 	/// Answers every app on its node: sandboxed on its own network, publishing nothing, and joined
 	/// by host to every app's network.
 	Proxy,
+	/// Keeps one machine across versions: the hostname and the MAC its `[container]` declares,
+	/// beside whatever other role it holds.
+	Identity,
 }
 
 impl Role {
@@ -33,6 +36,7 @@ impl Role {
 			"reporter" => Role::Reporter,
 			"peer" => Role::Peer,
 			"proxy" => Role::Proxy,
+			"identity" => Role::Identity,
 			other => Role::Driver(Driver::named(other)?),
 		})
 	}
@@ -95,6 +99,16 @@ impl Grants {
 		if self.allows(&manifest.name, role) { Ok(Some(role)) } else { Err(refused()) }
 	}
 
+	/// Refused when `manifest` declares an identity -- a hostname or a MAC of its own -- that the
+	/// node does not grant it: asking alone grants nothing, as for any role.
+	pub fn identity_of(&self, manifest: &Manifest) -> Result<(), Refused> {
+		let asks = manifest.container.as_ref().is_some_and(|container| container.asks_identity());
+		if !asks || self.allows(&manifest.name, Role::Identity) {
+			return Ok(());
+		}
+		Err(Refused { app: manifest.name.clone(), role: "identity".into() })
+	}
+
 	/// The driver `manifest` is, when it offers one and the node grants it.
 	pub fn driver_of(&self, manifest: &Manifest) -> Option<Driver> {
 		let driver = Driver::named(&manifest.driver.as_ref()?.provides)?;
@@ -126,6 +140,14 @@ mod tests {
 		assert_eq!(Grants::parse("cron:root"), Err("cron:root".into()));
 		assert_eq!(Grants::parse(":scheduler"), Err(":scheduler".into()));
 		assert!(Grants::parse("relay:peer").unwrap().allows("relay", Role::Peer));
+		let identity = Grants::parse("qq:identity").unwrap();
+		let mut asking = declared("qq", "");
+		asking.container.as_mut().unwrap().hostname = Some("qq".into());
+		assert_eq!(identity.identity_of(&asking), Ok(()));
+		let refused = Grants::default().identity_of(&asking);
+		assert_eq!(refused, Err(Refused { app: "qq".into(), role: "identity".into() }));
+		// Asking for none needs no grant; granting one asks for nothing either.
+		assert_eq!(Grants::default().identity_of(&declared("qq", "")), Ok(()));
 		let proxy = Grants::parse("pgproxy:proxy").unwrap();
 		assert_eq!(proxy.holder(Role::Proxy), Some("pgproxy"));
 		let asked = declared("pgproxy", "[shape]\nkind = \"proxy\"");

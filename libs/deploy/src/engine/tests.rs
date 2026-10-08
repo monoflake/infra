@@ -273,3 +273,29 @@ fn every_container_is_given_the_stop_grace_whoever_stops_it() {
 	assert_eq!(body.image.as_deref(), Some("sha256:aa"));
 	assert_eq!(body.labels.unwrap()["host.app"], "geo");
 }
+
+#[test]
+fn a_granted_identity_is_the_containers_hostname_and_its_mac_on_its_own_network() {
+	let geo = include_str!("../../fixtures/geo.toml");
+	let declared = geo.replace(
+		"health = \"/health\"",
+		"health = \"/health\"\nhostname = \"qq\"\nmac_address = \"02:42:ac:11:00:2a\"",
+	);
+	let manifest = crate::manifest::Manifest::parse(&declared).unwrap();
+	let version = Version { manifest, image: "sha256:aa".into() };
+	let body =
+		container_body(&version, &Shape::Sandboxed { env: vec![] }, vec![], HostConfig::default(), &[]);
+	assert_eq!(body.hostname.as_deref(), Some("qq"));
+	let endpoints = body.networking_config.unwrap().endpoints_config.unwrap();
+	assert_eq!(endpoints["app-geo"].mac_address.as_deref(), Some("02:42:ac:11:00:2a"));
+	// Without one, Docker names and draws them as ever.
+	let plain = crate::manifest::Manifest::parse(geo).unwrap();
+	let version = Version { manifest: plain, image: "sha256:aa".into() };
+	let body =
+		container_body(&version, &Shape::Sandboxed { env: vec![] }, vec![], HostConfig::default(), &[]);
+	assert_eq!(body.hostname, None);
+	assert_eq!(
+		body.networking_config.unwrap().endpoints_config.unwrap()["app-geo"].mac_address,
+		None
+	);
+}

@@ -619,6 +619,9 @@ async fn upload(
 		Err(error @ DeployError::PortTaken { .. }) => {
 			failed(StatusCode::CONFLICT, "invalid_port", error)
 		}
+		Err(error @ DeployError::MacTaken { .. }) => {
+			failed(StatusCode::CONFLICT, "invalid_declaration", error)
+		}
 		Err(error @ DeployError::Load(_)) => {
 			failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_image", error)
 		}

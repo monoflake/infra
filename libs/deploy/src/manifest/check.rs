@@ -4,7 +4,7 @@
 use super::{
 	ARCHES, Api, DISPLAY_NAME_LENGTH, LONGEST_WINDOW, Limit, Manifest, OWN, Objects, PORTS, RESERVED,
 	RESERVED_LABELS, Rollout, SHAPES, SIDES, Schedule, TIMEOUTS, VERSION, is_bucket, is_cron,
-	is_every, is_home,
+	is_every, is_home, is_local_mac,
 };
 use crate::sidecar::Driver;
 
@@ -100,6 +100,16 @@ pub enum Invalid {
 	BesideRole(String),
 	#[error("`{0}` is infra's own, shaped by its name, and is replaced in place")]
 	BesideOwn(String),
+	#[error(
+		"`hostname` `{0}` is not a label: lowercase letters, digits and inner hyphens, at most 63"
+	)]
+	Hostname(String),
+	#[error(
+		"`mac_address` `{0}` is not six hex octets, unicast and locally administered, as `02:..` is"
+	)]
+	Mac(String),
+	#[error("`rollout = \"beside\"` runs two versions at once, and one MAC cannot be on both")]
+	BesideMac,
 	#[error("`arch` asks for `{0}`, and the one architecture an app may ask for is arm64")]
 	Arch(String),
 	#[error("`{0}` is too long to run beside itself under a name of its own, at most 63 characters")]
@@ -173,6 +183,12 @@ impl Manifest {
 		}
 		if !container.health.starts_with('/') {
 			return Err(Invalid::Health);
+		}
+		if let Some(hostname) = container.hostname.as_ref().filter(|hostname| !is_label(hostname)) {
+			return Err(Invalid::Hostname(hostname.clone()));
+		}
+		if let Some(mac) = container.mac_address.as_ref().filter(|mac| !is_local_mac(mac)) {
+			return Err(Invalid::Mac(mac.clone()));
 		}
 		if self.data.as_ref().is_some_and(|data| !data.path.starts_with('/')) {
 			return Err(Invalid::DataPath);
@@ -293,6 +309,9 @@ impl Manifest {
 		}
 		if self.data.is_some() {
 			return Err(Invalid::BesideData);
+		}
+		if self.container.as_ref().is_some_and(|container| container.mac_address.is_some()) {
+			return Err(Invalid::BesideMac);
 		}
 		if let Some(driver) = self.drivers().next() {
 			return Err(Invalid::BesideSidecar(driver.name().into()));

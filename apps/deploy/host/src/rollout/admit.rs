@@ -52,6 +52,16 @@ pub(super) fn runnable(host: &Host, manifest: &Manifest) -> Result<(), Error> {
 	Err(Error::Unrunnable { app: manifest.name.clone(), arch: arch.to_owned(), native })
 }
 
+/// The app among `others` that already holds `mac`, the same address in either case.
+fn mac_holder<'a>(
+	mac: &str,
+	mut others: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+) -> Option<&'a str> {
+	others.find_map(|(name, theirs)| {
+		theirs.filter(|theirs| theirs.eq_ignore_ascii_case(mac)).map(|_| name)
+	})
+}
+
 /// The first of `mine` that one of `others` publishes already, and which.
 fn clash<'a>(
 	mine: &[u16],
@@ -75,7 +85,20 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 	};
 	// Refused before anything is stopped, as everything here is.
 	let role = host.config.grants.shape_of(manifest)?;
+	host.config.grants.identity_of(manifest)?;
 	runnable(host, manifest)?;
+	// Two containers holding one MAC on a node would answer for each other.
+	if let Some(mac) = container.mac_address.as_deref() {
+		let apps = host.store.apps()?;
+		let held = apps.iter().filter(|app| app.manifest.name != manifest.name).map(|app| {
+			let theirs =
+				app.manifest.container.as_ref().and_then(|container| container.mac_address.as_deref());
+			(app.manifest.name.as_str(), theirs)
+		});
+		if let Some(holder) = mac_holder(mac, held) {
+			return Err(Error::MacTaken { mac: mac.to_owned(), holder: holder.to_owned() });
+		}
+	}
 	// Docker refuses a port another container publishes only once the old version is stopped.
 	if role == Some(Role::Peer) {
 		let apps = host.store.apps()?;
@@ -106,7 +129,14 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 
 #[cfg(test)]
 mod tests {
-	use super::{TAKEN, admitted, clash, deployable};
+	use super::{TAKEN, admitted, clash, deployable, mac_holder};
+
+	#[test]
+	fn a_mac_another_app_on_the_node_holds_is_refused_in_either_case() {
+		let others = || [("geo", None), ("qq", Some("02:42:AC:11:00:2A"))].into_iter();
+		assert_eq!(mac_holder("02:42:ac:11:00:2a", others()), Some("qq"));
+		assert_eq!(mac_holder("02:42:ac:11:00:2b", others()), None);
+	}
 
 	#[test]
 	fn a_peer_may_not_publish_a_port_another_peer_publishes() {
