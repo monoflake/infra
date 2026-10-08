@@ -170,7 +170,16 @@ pub fn app_of(artifact: &str) -> Option<(String, &'static str)> {
 	named.then(|| (app.to_owned(), arch))
 }
 
-/// Whether `record` is a finished, successful run of `repository`'s deploy workflow on `main`.
+/// The query for `workflow`'s successful runs on `main` made at or after `since`. GitHub's `>=`
+/// qualifier is percent-encoded: a raw `>` is no character a URI may hold, and the request is
+/// refused before it is sent.
+fn recent_path(workflow: &str, since: jiff::Timestamp) -> String {
+	let since = since.strftime("%Y-%m-%dT%H:%M:%SZ");
+	format!(
+		"/actions/workflows/{workflow}/runs?branch=main&status=success&created=%3E%3D{since}&per_page=100"
+	)
+}
+
 /// The ids of `runs` that are `repository`'s to deploy, the oldest first.
 fn deployable(runs: Vec<Run>, repository: &str) -> Vec<u64> {
 	let mut ids: Vec<u64> =
@@ -180,6 +189,7 @@ fn deployable(runs: Vec<Run>, repository: &str) -> Vec<u64> {
 	ids
 }
 
+/// Whether `record` is a finished, successful run of `repository`'s deploy workflow on `main`.
 pub fn check(run: u64, record: &Run, repository: &str) -> Result<(), Error> {
 	let refuse = |why: String| Err(Error::NotDeployable { run, why });
 	if record.repository.full_name != repository {
@@ -278,12 +288,9 @@ impl GitHub {
 	pub async fn recent(&self, repository: &str, within: Duration) -> Result<Vec<u64>, Error> {
 		let since = jiff::Timestamp::now()
 			.checked_sub(jiff::SignedDuration::try_from(within).unwrap_or_default())
-			.unwrap_or_default()
-			.strftime("%Y-%m-%dT%H:%M:%SZ");
+			.unwrap_or_default();
 		let workflow = WORKFLOW.rsplit('/').next().unwrap_or(WORKFLOW);
-		let path = format!(
-			"/actions/workflows/{workflow}/runs?branch=main&status=success&created=>={since}&per_page=100"
-		);
+		let path = recent_path(workflow, since);
 		#[derive(Deserialize)]
 		struct Runs {
 			workflow_runs: Vec<Run>,
@@ -466,6 +473,18 @@ mod tests {
 			conclusion: Some("success".into()),
 			head_sha: None,
 		}
+	}
+
+	#[test]
+	fn the_recent_runs_are_asked_for_by_a_uri_that_parses() {
+		let since: jiff::Timestamp = "2026-10-01T04:05:06Z".parse().unwrap();
+		let path = recent_path("deploy.yml", since);
+		let uri = format!("{}/repos/o/r{path}", canmi::EXTERNAL_GITHUB_API);
+		let parsed: hyper::Uri = uri.parse().unwrap();
+		let query = parsed.query().unwrap();
+		assert!(query.contains("created=%3E%3D2026-10-01T04:05:06Z"), "{query}");
+		assert!(query.contains("branch=main") && query.contains("status=success"));
+		assert!(!uri.contains('>'));
 	}
 
 	#[test]
