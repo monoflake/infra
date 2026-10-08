@@ -193,12 +193,15 @@ the hook, no read from the console -- until it went back to QUIC, so every node 
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.
 
-**What every node runs is host, keeper, Caddy, the tunnel, the meter and the relay.** CI's notice
+**What every node runs is host, keeper, Caddy, the tunnel, the meter, the relay and `primary`, the
+database's proxy.** CI's notice
 reaches host through Caddy's door on every node -- [host.md](host.md), "host has no interface on the
 node, and a door Caddy keeps"; the resolver
 answers the house's LAN and stays on the node that has one. `mise run node` gives the relay what it
 reads -- `RELAY_SECRET`, `HOST_READ_TOKEN` and `RELAY_PEERS` in its `secret.env`, the read token and
-`relay:peer` in host's `.env` -- both shared secrets made once, in the repository's secrets.
+`relay:peer` in host's `.env` -- both shared secrets made once, in the repository's secrets. It
+grants every node `primary:proxy` as well, so an app reaches the database through its own node's
+proxy -- platform's `spec/architecture/databases.md`.
 
 **Each node's host has a token of its own**, `HOST_TOKEN_<NAME>` in the repository's secrets, made
 the first time the node is brought up: the token is root on its machine, so one leaked stays one

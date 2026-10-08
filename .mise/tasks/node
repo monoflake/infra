@@ -235,11 +235,12 @@ echo written
 # What the relay app, a peer on every node, is given. Its port is `port` in its service.toml in the
 # platform. See spec/architecture/host.md, "A role is asked for by the app and granted by the node".
 RELAY_PORT = 12012
-# The roles host's `GRANTS` names on every node, and the steward that updates it, by family. See
-# platform's spec/architecture/cron.md, apt.md and packages.md.
+# The roles host's `GRANTS` names on every node, and the steward that updates it, by family: the
+# relay, cron, `primary`, the database's proxy every app reaches it through, and apt or apk. See
+# platform's spec/architecture/cron.md, databases.md, apt.md and packages.md.
 GRANTS = {
-	"debian": ("relay:peer", "cron:scheduler", "apt:steward"),
-	"alpine": ("relay:peer", "cron:scheduler", "apk:steward"),
+	"debian": ("relay:peer", "cron:scheduler", "primary:proxy", "apt:steward"),
+	"alpine": ("relay:peer", "cron:scheduler", "primary:proxy", "apk:steward"),
 }
 # What a core node grants besides: the platform's Postgres, a peer publishing 5432; the objects
 # driver, whose sidecars the platform's apps there run; and etcd, `quorum`, a peer the database's
