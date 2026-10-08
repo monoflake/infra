@@ -43,10 +43,13 @@ function freePort(): Promise<number> {
 	});
 }
 
-function answers(port: number): Promise<boolean> {
+export function answers(port: number): Promise<boolean> {
 	return new Promise((resolve) => {
 		const socket = connect(port, '127.0.0.1');
-		socket.once('connect', () => resolve(!socket.destroy()));
+		socket.once('connect', () => {
+			socket.destroy();
+			resolve(true);
+		});
 		socket.once('error', () => resolve(false));
 	});
 }
