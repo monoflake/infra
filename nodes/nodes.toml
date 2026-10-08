@@ -35,6 +35,7 @@ domain = "az"
 expiry = 2030
 system = "debian"
 ipv4 = false
+grants = ["database:peer", "quorum:peer"]
 
 [bru]
 tier = "datacenter"
@@ -63,4 +64,4 @@ tier = "home"
 domain = "int"
 system = "debian"
 emulate = ["arm64"]
-grants = ["database:peer"]
+grants = ["database:peer", "quorum:peer"]
