@@ -63,5 +63,4 @@ tier = "home"
 domain = "int"
 system = "debian"
 emulate = ["arm64"]
-tunnel_protocol = "http2"
 grants = ["database:peer", "quorum:peer"]

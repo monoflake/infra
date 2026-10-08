@@ -183,7 +183,9 @@ alone.
 **A node may set its tunnel's protocol**, `tunnel_protocol` in `nodes.toml`, one of `quic`,
 `http2` or `auto`: `mise run node` writes it as `TUNNEL_TRANSPORT_PROTOCOL` into the tunnel's
 `config.env`, which overrides the image's QUIC, removes it when unset, and redeploys the tunnel when
-it changed. It is for a node whose line drops QUIC, `sha` first.
+it changed. A tunnel on `http2` serves its public hostnames but no request through Workers VPC
+reaches it: `sha` ran `http2` from 02:05 on 2026-10-08 and received nothing by VPC -- no notice from
+the hook, no read from the console -- until it went back to QUIC, so every node runs QUIC.
 
 **The tunnel comes first.** host deploys the tunnel in the run it is handed, and a first deploy
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
