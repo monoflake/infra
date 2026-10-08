@@ -6,6 +6,7 @@ mod admit;
 mod beside;
 mod catch_up;
 mod panel;
+mod redeclare;
 mod remove;
 mod route;
 mod run;
@@ -79,6 +80,9 @@ pub enum Error {
 		 its host was given no EMULATE={arch}"
 	)]
 	Unrunnable { app: String, arch: String, native: String },
+	/// An image looked for in CI's recent runs, which GitHub would not give.
+	#[error("finding an image of it: {0}")]
+	Finding(String),
 }
 
 /// Where `manifest`'s health is asked on this node, exactly as its deploy's check asks it; none for

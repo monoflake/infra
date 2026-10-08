@@ -275,6 +275,19 @@ impl Engine {
 		}
 	}
 
+	/// Set the running container's memory ceiling to `mb`, swap equal to it as `run` sets it, without
+	/// restarting it. Docker refuses a ceiling below what the container already holds.
+	pub async fn update_memory(&self, name: &str, mb: u32) -> Result<(), Error> {
+		let bytes = i64::from(mb) * 1024 * 1024;
+		let body = bollard::models::ContainerUpdateBody {
+			memory: Some(bytes),
+			memory_swap: Some(bytes),
+			..Default::default()
+		};
+		self.docker.update_container(name, body).await?;
+		Ok(())
+	}
+
 	/// Give the container `from` the name `to`, running as it is: Docker's DNS answers by the new
 	/// name from then on, and an address it already has stays.
 	pub async fn rename(&self, from: &str, to: &str) -> Result<(), Error> {

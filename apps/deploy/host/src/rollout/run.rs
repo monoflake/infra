@@ -2,6 +2,8 @@
 //! "keeper has its own intake" and "Caddy is deployed like any app, and is the one door".
 
 use super::admit::runnable;
+use super::catch_up::WITHIN;
+use super::redeclare::{Redeclared, planned, redeclare};
 use super::version::{archived, skip, staged};
 use crate::Host;
 use crate::store::{self, Action, Source, Stage};
@@ -35,37 +37,6 @@ pub async fn from_run(
 		}
 	};
 	let commit = built.commit.clone();
-	let artifacts: Vec<_> = match only {
-		Some(app) => built.artifacts.iter().filter(|artifact| artifact.app == app).cloned().collect(),
-		None => built.artifacts.clone(),
-	};
-	if let Some(app) = only.filter(|_| artifacts.is_empty()) {
-		eprintln!("host: run {run}: it built nothing for `{app}`");
-		return true;
-	}
-	// What this node settled of the run already is not done again, unless the operator asks for it.
-	let settled = host.store.settled(run).unwrap_or_default();
-	let overridden = by_hand || only.is_some();
-	let artifacts = unsettled(artifacts, &settled, overridden, |artifact| artifact.app.as_str());
-	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
-		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
-		// Not taken, so the notice keeper sends afterwards is.
-		return false;
-	}
-	// A new host, keeper or Caddy reaches the canary first; deployed by hand, it goes now.
-	let mut waiting = HashMap::new();
-	let built_apps = || artifacts.iter().map(|artifact| artifact.app.as_str());
-	if let Canary::At(canary) = host.config.canary
-		&& !by_hand
-		&& deploy::canary::gated(built_apps())
-	{
-		let gated: Vec<&str> = built_apps().filter(|app| GATED.contains(app)).collect();
-		let held = Held { host: &host, repository, run, commit: commit.clone() };
-		match held.wait(canary, &artifacts, &gated).await {
-			Some(ids) => waiting = ids,
-			None => return true,
-		}
-	}
 	// Read apart when the run uploaded them, so nothing placed elsewhere, held or rolled out by hand
 	// is downloaded at all; a run from before reads each from its image.
 	let declared = match &built.declarations {
@@ -78,6 +49,61 @@ pub async fn from_run(
 		},
 		None => HashMap::new(),
 	};
+	let artifacts: Vec<_> = match only {
+		Some(app) => built.artifacts.iter().filter(|artifact| artifact.app == app).cloned().collect(),
+		None => built.artifacts.clone(),
+	};
+	let with_images =
+		built.artifacts.iter().chain(&built.others).map(|artifact| artifact.app.as_str());
+	let redeclared: Vec<String> = redeclared(with_images, &declared)
+		.into_iter()
+		.filter(|app| only.is_none_or(|only| only == app))
+		.collect();
+	if let Some(app) = only.filter(|_| artifacts.is_empty() && redeclared.is_empty()) {
+		eprintln!("host: run {run}: it built nothing for `{app}`");
+		return true;
+	}
+	// What this node settled of the run already is not done again, unless the operator asks for it.
+	let settled = host.store.settled(run).unwrap_or_default();
+	let overridden = by_hand || only.is_some();
+	let artifacts = unsettled(artifacts, &settled, overridden, |artifact| artifact.app.as_str());
+	let redeclared = unsettled(redeclared, &settled, overridden, String::as_str);
+	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
+		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
+		// Not taken, so the notice keeper sends afterwards is.
+		return false;
+	}
+	// A new host, keeper or Caddy reaches the canary first, and so does a declaration of one that
+	// restarts it; deployed by hand, it goes now.
+	let mut waiting = HashMap::new();
+	let apps: Vec<&str> = artifacts
+		.iter()
+		.map(|artifact| artifact.app.as_str())
+		.chain(redeclared.iter().map(String::as_str))
+		.filter(|app| *app != "host")
+		.collect();
+	let restarts = |app: &str| {
+		let manifest = declared.get(app).and_then(|text| Manifest::parse(text).ok());
+		manifest.is_none_or(|manifest| {
+			planned(&host, &manifest).ok().flatten().is_none_or(|apply| apply.restarts())
+		})
+	};
+	let gated: Vec<&str> = artifacts
+		.iter()
+		.map(|artifact| artifact.app.as_str())
+		.chain(redeclared.iter().map(String::as_str).filter(|app| restarts(app)))
+		.filter(|app| GATED.contains(app))
+		.collect();
+	if let Canary::At(canary) = host.config.canary
+		&& !by_hand
+		&& !gated.is_empty()
+	{
+		let held = Held { host: &host, repository, run, commit: commit.clone() };
+		match held.wait(canary, &apps, &gated).await {
+			Some(ids) => waiting = ids,
+			None => return true,
+		}
+	}
 	let mut whole = true;
 	// See spec/architecture/host.md, "Caddy is deployed like any app, and is the one door".
 	let artifacts = caddy_first(artifacts, |artifact| artifact.app.as_str());
@@ -177,7 +203,96 @@ pub async fn from_run(
 			}
 		}
 	}
+	for app in caddy_first(redeclared, String::as_str) {
+		let source = Source::run(run, commit.clone()).of(repository);
+		let (running, admitting) = (store::Outcome::Running, Some(Stage::Admitting));
+		let opened = match waiting.remove(&app) {
+			Some(id) => host.store.advance(id, Stage::Admitting, None).map(|()| id),
+			None => host.store.record(&app, Action::Deploy, &source, None, running, admitting),
+		};
+		let Ok(id) = opened.inspect_err(|error| eprintln!("host: run {run}: {app}: {error}")) else {
+			whole = false;
+			continue;
+		};
+		let text = declared.get(&app).cloned().unwrap_or_default();
+		let reading = async { Manifest::parse(&text) };
+		let Ok(manifest) = staged(&host.store, id, Stage::Admitting, reading).await else { continue };
+		if let Some(why) = passed_over(&host, &manifest, only, repository, run) {
+			skip(&host, id, &why);
+			eprintln!("host: run {run}: {app}'s declaration was not applied: {why}");
+			continue;
+		}
+		let applied = match redeclare(&host, id, manifest.clone()).await {
+			Ok(Redeclared::Applied(outcome)) => Ok(outcome),
+			Ok(Redeclared::NeedsImage) => imaged(&host, github, id, manifest, repository, run).await,
+			Err(error) => Err(error),
+		};
+		match applied {
+			Ok(outcome) => eprintln!("host: run {run}: {}'s declaration taken", outcome.name),
+			Err(error) => {
+				eprintln!("host: run {run}: {app}: {error}");
+				whole = false;
+			}
+		}
+	}
 	whole
+}
+
+/// The apps whose declaration `built` changed with no image of them in any architecture: what a
+/// node applies over the image it runs. host's own is keeper's, and never one: host's binary
+/// carries its declaration, so a change to it builds an image.
+fn redeclared<'a>(
+	imaged: impl Iterator<Item = &'a str>,
+	declared: &HashMap<String, String>,
+) -> Vec<String> {
+	let imaged: std::collections::HashSet<&str> = imaged.collect();
+	let mut apps: Vec<String> = declared
+		.keys()
+		.filter(|app| !imaged.contains(app.as_str()) && *app != "host")
+		.cloned()
+		.collect();
+	apps.sort_unstable();
+	apps
+}
+
+/// Why a declaration that needs an image here, and has none within reach, was passed over.
+pub(super) const NO_IMAGE: &str =
+	"declaration changed, and no image of it is within 7 days; run the build by hand";
+
+/// A declaration of an app this node runs no image of, in the architecture it asks for: deployed
+/// with the newest image of it a run of `repository` built within 7 days, into event `id`.
+async fn imaged(
+	host: &Arc<Host>,
+	github: &deploy::github::GitHub,
+	id: i64,
+	manifest: Manifest,
+	repository: &str,
+	run: u64,
+) -> Result<super::Outcome, super::Error> {
+	let app = manifest.name.clone();
+	staged(&host.store, id, Stage::Admitting, async { runnable(host, &manifest) }).await?;
+	let wanted = manifest.arch.as_deref().or(host.config.native).unwrap_or_default().to_owned();
+	let finding = async {
+		let recent = github.recent(repository, WITHIN).await.map_err(|error| error.to_string())?;
+		for newer in recent.iter().rev() {
+			let built = github.artifacts(repository, *newer).await.map_err(|error| error.to_string())?;
+			if let Some(artifact) = built.built_for(&app, &wanted) {
+				let fetched = github.fetch(artifact, &host.config.incoming).await;
+				return fetched.map(|fetched| Some((*newer, fetched.image))).map_err(|e| e.to_string());
+			}
+		}
+		Ok(None)
+	};
+	let found = staged(&host.store, id, Stage::Downloading, finding).await;
+	let Some((newer, image)) = found.map_err(super::Error::Finding)? else {
+		skip(host, id, NO_IMAGE);
+		return Ok(super::Outcome { name: app, image: String::new(), routed: Ok(()) });
+	};
+	let why = format!("declaration applied with run {newer}'s image, the newest within 7 days");
+	if let Err(error) = host.store.note(id, &why) {
+		eprintln!("host: recording event {id}: {error}");
+	}
+	archived(host, id, &app, manifest, &image, Some(run)).await
 }
 
 /// `artifacts` but the apps `settled` of the run already, every one when the operator `overridden`
@@ -209,14 +324,14 @@ impl Held<'_> {
 	async fn wait(
 		&self,
 		canary: std::net::Ipv4Addr,
-		artifacts: &[deploy::github::Artifact],
+		apps: &[&str],
 		gated: &[&str],
 	) -> Option<HashMap<String, i64>> {
 		let (host, repository, run) = (self.host, self.repository, self.run);
 		let source = Source::run(run, self.commit.clone()).of(repository);
 		let (running, waiting) = (store::Outcome::Running, Some(Stage::Waiting));
 		let mut ids = HashMap::new();
-		for app in artifacts.iter().map(|artifact| artifact.app.as_str()).filter(|app| *app != "host") {
+		for app in apps.iter().copied().filter(|app| *app != "host") {
 			match host.store.record(app, Action::Deploy, &source, None, running, waiting) {
 				Ok(id) => {
 					ids.insert(app.to_owned(), id);
@@ -321,6 +436,46 @@ mod tests {
 			}
 		}
 		(directory, store)
+	}
+
+	#[test]
+	fn a_declaration_with_no_image_of_it_in_any_architecture_is_applied_alone() {
+		let declared: std::collections::HashMap<String, String> =
+			["geo", "caddy", "relay", "host"].map(|app| (app.to_owned(), String::new())).into();
+		// relay was built for arm64 alone: an image, not a re-declaration, wherever it runs.
+		let imaged = ["geo", "relay"].into_iter();
+		assert_eq!(super::redeclared(imaged, &declared), ["caddy"]);
+	}
+
+	#[tokio::test]
+	async fn a_declaration_of_an_app_this_node_runs_no_image_of_asks_for_one() {
+		use crate::rollout::redeclare::{Redeclared, redeclare};
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"geo\"\nplacements = [\"rdu\"]\n[container]\nport = 23440\n\
+			 health = \"/health\"\n",
+		)
+		.unwrap();
+		let source = Source::run(42, None).of("monoflake/platform");
+		let (running, admitting) = (Outcome::Running, Some(Stage::Admitting));
+		let id = host.store.record("geo", Action::Deploy, &source, None, running, admitting).unwrap();
+		let asked = redeclare(&host, id, manifest.clone()).await.unwrap();
+		assert!(matches!(asked, Redeclared::NeedsImage));
+		// Running another architecture is no image of the one it now asks for.
+		let deployed = crate::store::Deployed {
+			manifest: manifest.clone(),
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		host.store.put_app(&deployed).unwrap();
+		let pinned = deploy::Manifest { arch: Some("arm64".into()), ..manifest };
+		let host = crate::testing_with(directory.path(), |config| {
+			config.emulate = vec!["arm64".into()];
+		});
+		assert!(matches!(redeclare(&host, id, pinned).await.unwrap(), Redeclared::NeedsImage));
 	}
 
 	#[test]

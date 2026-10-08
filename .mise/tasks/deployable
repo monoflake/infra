@@ -2,9 +2,11 @@
 #MISE description="The images a change needs rebuilt, as JSON: `deployable [--all] [--since REV | --git BASE [--head REV]] [--files ...]`"
 """An app is deployable when its directory holds a `service.toml` and a `Dockerfile`; one with the
 declaration alone is placed on Workers, which Cloudflare builds. It needs a new image when
-anything under that directory changed, when a crate it is built from did, when a package
-Cargo.lock resolves it to did, or when the build itself did. CI reads the list to decide what to
-build; see spec/architecture/host.md, "The machine pulls; nothing pushes into it"."""
+anything under that directory changed but its `service.toml`, when a crate it is built from did --
+a declaration its binary includes among them -- when a package Cargo.lock resolves it to did, or
+when the build itself did. A changed declaration alone needs no image: `--declared` lists those,
+which CI uploads without building. See spec/architecture/host.md, "The machine pulls; nothing
+pushes into it"."""
 
 import atexit
 import json
@@ -16,7 +18,7 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from graph import ROOT, app_directories, app_of, build_inputs, changed, dependents, owner, rust_graph  # noqa: E402
+from graph import ROOT, app_directories, app_of, build_inputs, changed, dependents, embedded, owner, rust_graph  # noqa: E402
 from resolved import lock_moved, manifest_moved, tree_moved  # noqa: E402
 
 # How every image is built: a change here is a change to all of them.
@@ -121,18 +123,25 @@ def resolution(files, declared, crate_dirs, revisions):
 	return moved
 
 
+def declaration(path):
+	"""Whether `path` is an app's own `service.toml`, directly in its directory."""
+	app = app_of(path)
+	return app is not None and path.endswith(f"/{app}/service.toml")
+
+
 def needed(files, declared, revisions=None):
 	"""The apps `files` need rebuilt; `revisions` reads a file before and after, as (base, head)."""
 	if any(f in EVERY_IMAGE for f in files):
 		return sorted(declared)
-	# A file another crate includes is ignored here: every such include today is a test's, which
-	# no image carries. A binary that embedded another crate's file would need it counted.
 	crate_dirs, crate_edges, _included = rust_graph()
 	built = build_inputs(crate_dirs)
+	# A file a binary includes outside its tests is that crate's source, a declaration among them.
+	carried = embedded(crate_dirs)
 	crates, chosen = set(), set()
 	for f in files:
 		crates |= built.get(owner(f, built) or f, set())
-		if app_of(f) in declared:
+		crates |= carried.get(f, set())
+		if app_of(f) in declared and not declaration(f):
 			chosen.add(app_of(f))
 		crate = crate_dirs.get(owner(f, crate_dirs) or "")
 		if crate and (f.endswith(".rs") or f.endswith("/Cargo.toml")):
@@ -145,28 +154,50 @@ def needed(files, declared, revisions=None):
 	return sorted(chosen)
 
 
-def main():
-	arguments = sys.argv[1:]
-	declared = apps()
-	if "--all" in arguments:
-		result = sorted(declared)
-	elif "--files" in arguments:
-		result = needed(arguments[arguments.index("--files") + 1 :], declared)
-	elif "--git" in arguments:
+def redeclared(files, declared, rebuilt):
+	"""The apps whose `service.toml` is among `files` and whose image is not among `rebuilt`: a
+	declaration to apply over the image the node already runs."""
+	touched = {app_of(f) for f in files if declaration(f) and app_of(f) in declared}
+	return sorted(touched - set(rebuilt))
+
+
+def inputs(arguments):
+	"""The files a change touched and the revisions to read them at, as the arguments name them:
+	`--files` alone has no revisions, `--git` compares two commits, and neither compares the working
+	copy with `--since` or its parent."""
+	if "--files" in arguments:
+		return arguments[arguments.index("--files") + 1 :], None
+	if "--git" in arguments:
 		base = arguments[arguments.index("--git") + 1]
 		head = arguments[arguments.index("--head") + 1] if "--head" in arguments else "HEAD"
 		# HEAD is what CI checked out, so its tree is the one on disk.
 		after = Revision(None if head == "HEAD" else head)
-		result = needed(git_changed(base, head), declared, (Revision(base), after))
-	else:
-		since = arguments[arguments.index("--since") + 1] if "--since" in arguments else None
-		files = changed(since)
-		try:
-			before = Revision(jj_commit(since or "@-"))
-		except subprocess.CalledProcessError:
-			before = None
-		result = needed(files, declared, before and (before, Revision()))
-	print(json.dumps(result))
+		return git_changed(base, head), (Revision(base), after)
+	since = arguments[arguments.index("--since") + 1] if "--since" in arguments else None
+	files = changed(since)
+	try:
+		before = Revision(jj_commit(since or "@-"))
+	except subprocess.CalledProcessError:
+		before = None
+	return files, before and (before, Revision())
+
+
+def main():
+	arguments = sys.argv[1:]
+	declared = apps()
+	if "--declared" in arguments:
+		# Everything rebuilt leaves no declaration to apply alone.
+		if "--all" in arguments:
+			print(json.dumps([]))
+			return 0
+		files, revisions = inputs(arguments)
+		print(json.dumps(redeclared(files, declared, needed(files, declared, revisions))))
+		return 0
+	if "--all" in arguments:
+		print(json.dumps(sorted(declared)))
+		return 0
+	files, revisions = inputs(arguments)
+	print(json.dumps(needed(files, declared, revisions)))
 	return 0
 
 

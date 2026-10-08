@@ -14,7 +14,7 @@ use std::time::Duration;
 const EVERY: Duration = Duration::from_secs(15 * 60);
 
 /// How far back: as long as CI keeps a run's artifacts.
-const WITHIN: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+pub(super) const WITHIN: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// keeper's port, on host's own network, where a missed run that built host is handed to it.
 const KEEPER_PORT: u16 = 11010;
@@ -72,6 +72,14 @@ pub(super) fn plan(taken: &[Taken], built: &[(u64, Vec<String>)]) -> Vec<Missed>
 	planned
 }
 
+/// The apps a run touched: those it built an image of, and those whose declaration it carries.
+pub(super) fn touched(imaged: impl Iterator<Item = String>, declared: Vec<String>) -> Vec<String> {
+	let mut apps: Vec<String> = imaged.chain(declared).collect();
+	apps.sort_unstable();
+	apps.dedup();
+	apps
+}
+
 /// Look for missed runs at start and every 15 minutes after, one pass at a time.
 pub async fn every(host: Arc<Host>) {
 	let mut empty = HashSet::new();
@@ -102,12 +110,31 @@ async fn pass(host: &Arc<Host>, empty: &mut HashSet<u64>) {
 			if empty.contains(&run) || in_flight(host, repository, run) {
 				continue;
 			}
-			match github.artifacts(repository, run).await {
-				Ok(listed) if listed.artifacts.is_empty() => {
-					empty.insert(run);
+			let listed = match github.artifacts(repository, run).await {
+				Ok(listed) => listed,
+				Err(error) => {
+					eprintln!("host: catching up on {repository} run {run}: {error}");
+					continue;
 				}
-				Ok(listed) => built.push((run, listed.artifacts.into_iter().map(|a| a.app).collect())),
-				Err(error) => eprintln!("host: catching up on {repository} run {run}: {error}"),
+			};
+			// A run that changed declarations alone carries them and no image: it touched them.
+			let declared = match &listed.declarations {
+				Some(declarations) => {
+					match github.declarations(declarations, &host.config.incoming).await {
+						Ok(declared) => declared.into_keys().collect(),
+						Err(error) => {
+							eprintln!("host: catching up on {repository} run {run}: {error}");
+							continue;
+						}
+					}
+				}
+				None => Vec::new(),
+			};
+			let apps = touched(listed.artifacts.into_iter().map(|artifact| artifact.app), declared);
+			if apps.is_empty() {
+				empty.insert(run);
+			} else {
+				built.push((run, apps));
 			}
 		}
 		for missed in plan(&taken, &built) {
@@ -223,6 +250,17 @@ mod tests {
 			runs.map(|(run, _)| *run).collect::<Vec<_>>()
 		};
 		assert_eq!((deployed("relay"), deployed("geo")), (vec![200], vec![300]));
+	}
+
+	#[test]
+	fn a_run_that_changed_a_declaration_alone_is_not_an_empty_one() {
+		use super::touched;
+		assert_eq!(touched(std::iter::empty(), apps(&["geo"])), ["geo"]);
+		assert_eq!(touched(apps(&["relay", "geo"]).into_iter(), apps(&["geo"])), ["geo", "relay"]);
+		assert!(touched(std::iter::empty(), vec![]).is_empty());
+		// A missed re-declaration of geo, older than a run that built geo, is masked like an image.
+		let planned = plan(&[], &[(200, apps(&["geo"])), (300, apps(&["geo"]))]);
+		assert_eq!(planned[0].masked, [("geo".to_owned(), 300)]);
 	}
 
 	#[test]

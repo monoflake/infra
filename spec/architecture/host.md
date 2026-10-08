@@ -149,6 +149,17 @@ So the direction is reversed, and trust is moved off the channel.
   declaration past 64 KiB, or not a zip -- fails the notice rather than falling back to downloading
   every image. Each image still carries its own `service.toml`, which keeper reads. The
   notice is a hint, not an authority: a forged one can at worst redeploy what `main` already built.
+- **A declaration changed alone is applied without a new image.** An app's own `service.toml` is not
+  an input of its image unless its binary includes it outside a test -- host's does, and keeper's
+  includes host's -- so CI lists such an app apart, `deployable --declared`, and uploads its
+  declaration alone. host keeps the image it runs and applies the change as narrowly as it can:
+  `display_name`, `placements`, `rollout` and health are stored; `interface`, `api` and `schedules`
+  are stored and Caddy and cron re-rendered; memory is updated live; and any other field, one host
+  does not know included, recreates the container on the same image through the ordinary deploy.
+  The new declaration is a new version over the same image, so a rollback returns to the old one.
+  A node the app is not on yet, or one asking another architecture, takes the newest image built
+  within 7 days, and skips saying so when there is none. A re-declaration of host, keeper or Caddy
+  that restarts it waits for the canary; one that only stores or renders does not.
 - **A run whose notice never came is taken anyway.** At start and every 15 minutes host lists each
   source's successful `deploy.yml` runs on `main` from the 7 days CI keeps artifacts, and a run it
   has no row of, newer than the oldest run of that repository it holds, was missed -- a host that

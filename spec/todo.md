@@ -15,15 +15,6 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
 - **`app_of` stops reading a bare `deploy-<app>` as arm64** once no run that still names its
   artifacts that way is fresh enough to deploy -- [architecture/host.md](architecture/host.md),
   "The machine pulls; nothing pushes into it".
-- **A declaration changed alone is applied without a new image**, decided on 2026-10-08. CI lists the
-  apps whose `service.toml` changed and nothing else of their image -- host and keeper excepted,
-  whose binaries include a declaration -- and uploads only their declarations. host keeps the image
-  it runs and applies the change as narrowly as it can: `display_name`, `rollout`, health,
-  `placements` are stored; `interface` and `api` re-render Caddy; `schedules` tell cron; memory is
-  updated live; port, socket, data, objects, postgres, shape and driver recreate the container on
-  the same image; and any field it does not know recreates it. A node newly placed takes the newest
-  image built within 7 days. A re-declaration of host, keeper or Caddy that needs a restart waits
-  for the canary.
 - **A health-check stage of its own**, which needs `libs/deploy`'s `replace_beside` to report its
   progress: today `starting` covers the start and the check together --
   [architecture/host.md](architecture/host.md), "Every event is kept, and none is pruned".
