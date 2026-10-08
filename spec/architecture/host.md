@@ -478,6 +478,11 @@ start it. keeper is never started by hand: the first one is deployed by host.
 Containers are kept alive by dockerd's restart policy, and routes live in Caddy, not in host. So a
 host or keeper that is down means nothing can be deployed, and nothing stops being served.
 
+**Every container is given twenty seconds between `SIGTERM` and `SIGKILL`, whoever stops it**: host
+and keeper stop and restart with that grace, and each container is created with it as its
+`StopTimeout`, so dockerd stopping on a reboot or an upgrade gives it the same rather than its own
+ten -- enough for the platform's database to stop in order.
+
 **A node's Docker starts only once `/data` is mounted.** Every container binds a path under it, and
 Docker started without it creates those paths empty on the root disk: Caddy comes up with no
 configuration, host with a new database, and every app on nothing, all of it looking like a clean

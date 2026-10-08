@@ -40,6 +40,22 @@ const REPOSITORY: &str = "host";
 /// Memory a container gets when its declaration names none.
 pub const DEFAULT_MEMORY_MB: u32 = 512;
 
+/// How long a container has between SIGTERM and SIGKILL, whoever stops it: host or keeper, and the
+/// Docker daemon itself when the machine reboots or Docker is upgraded, which reads it from the
+/// container's `StopTimeout` and would otherwise give its own 10 s. Enough for the platform's
+/// database to stop in order.
+pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// `STOP_GRACE` in whole seconds, as Docker's stop and restart take it.
+fn stop_seconds() -> i32 {
+	i32::try_from(STOP_GRACE.as_secs()).unwrap_or(i32::MAX)
+}
+
+/// `STOP_GRACE` as a created container's `StopTimeout`, what the daemon gives it when it stops.
+pub(crate) fn stop_timeout() -> Option<i64> {
+	Some(i64::try_from(STOP_GRACE.as_secs()).unwrap_or(i64::MAX))
+}
+
 /// The label every container carries its own version in, so what runs can be read back from
 /// Docker by a program that keeps no state of its own.
 const VERSION_LABEL: &str = "host.version";
@@ -256,7 +272,7 @@ impl Engine {
 	pub async fn remove(&self, name: &str) -> Result<(), Error> {
 		match self
 			.docker
-			.stop_container(name, Some(StopContainerOptionsBuilder::new().t(20).build()))
+			.stop_container(name, Some(StopContainerOptionsBuilder::new().t(stop_seconds()).build()))
 			.await
 		{
 			Ok(()) => {}
@@ -314,7 +330,7 @@ impl Engine {
 
 	/// Stop it, leaving it in place; Docker's restart policy leaves a stopped container stopped.
 	pub async fn stop(&self, name: &str) -> Result<(), Error> {
-		let options = StopContainerOptionsBuilder::new().t(20).build();
+		let options = StopContainerOptionsBuilder::new().t(stop_seconds()).build();
 		self.docker.stop_container(name, Some(options)).await?;
 		Ok(())
 	}
@@ -332,7 +348,7 @@ impl Engine {
 	}
 
 	pub async fn restart(&self, name: &str) -> Result<(), Error> {
-		let options = RestartContainerOptionsBuilder::new().t(20).build();
+		let options = RestartContainerOptionsBuilder::new().t(stop_seconds()).build();
 		self.docker.restart_container(name, Some(options)).await?;
 		Ok(())
 	}

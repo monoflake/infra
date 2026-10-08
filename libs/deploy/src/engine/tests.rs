@@ -252,3 +252,24 @@ fn a_container_is_asked_for_as_the_platform_its_app_asks_for() {
 	let native = create_options("geo", None);
 	assert_eq!((native.name.as_deref(), native.platform.as_str()), (Some("geo"), ""));
 }
+
+#[test]
+fn every_container_is_given_the_stop_grace_whoever_stops_it() {
+	assert_eq!(STOP_GRACE.as_secs(), 20);
+	let geo = crate::manifest::Manifest::parse(include_str!("../../fixtures/geo.toml")).unwrap();
+	let version = Version { manifest: geo, image: "sha256:aa".into() };
+	let shapes = [
+		Shape::Sandboxed { env: vec![] },
+		Shape::Platform { env: vec![] },
+		Shape::Peer { env: vec![] },
+		Shape::Steward { env: vec![] },
+	];
+	for shape in shapes {
+		let body = container_body(&version, &shape, vec![], HostConfig::default(), &[]);
+		assert_eq!(body.stop_timeout, Some(20), "{shape:?}");
+	}
+	let body =
+		container_body(&version, &Shape::Sandboxed { env: vec![] }, vec![], HostConfig::default(), &[]);
+	assert_eq!(body.image.as_deref(), Some("sha256:aa"));
+	assert_eq!(body.labels.unwrap()["host.app"], "geo");
+}

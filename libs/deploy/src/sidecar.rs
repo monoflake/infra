@@ -2,7 +2,7 @@
 //! the drivers whose images those run. One mechanism, three kinds: see
 //! platform's spec/architecture/objects.md and platform's spec/architecture/databases.md.
 
-use crate::engine::{DEFAULT_MEMORY_MB, SCRATCH, bind, network_of, sandbox};
+use crate::engine::{DEFAULT_MEMORY_MB, SCRATCH, bind, network_of, sandbox, stop_timeout};
 use crate::manifest::Manifest;
 use bollard::models::{ContainerCreateBody, EndpointSettings};
 use std::collections::HashMap;
@@ -158,6 +158,7 @@ impl Sidecar {
 		}
 		ContainerCreateBody {
 			image: Some(self.image.clone()),
+			stop_timeout: stop_timeout(),
 			env: Some(self.env.clone()),
 			user: self.user.map(|(uid, gid)| format!("{uid}:{gid}")),
 			labels: Some(HashMap::from([(SIDECAR_LABEL.into(), self.app.clone())])),
@@ -255,6 +256,7 @@ mod tests {
 	fn an_objects_sidecar_runs_as_its_image_says_with_tmp_alone() {
 		let body = sidecar(Driver::Objects).body();
 		assert_eq!(body.user, None);
+		assert_eq!(body.stop_timeout, Some(20));
 		let tmpfs = body.host_config.unwrap().tmpfs.unwrap();
 		assert_eq!(tmpfs.keys().collect::<Vec<_>>(), ["/tmp"]);
 	}
@@ -263,6 +265,8 @@ mod tests {
 	fn a_postgres_sidecar_runs_as_postgres_over_pgdata_with_its_socket_on_tmpfs() {
 		let body = sidecar(Driver::Postgres).body();
 		assert_eq!(body.user.as_deref(), Some("70:70"));
+		// The daemon gives it the grace host's own stop does, for an ordered shutdown either way.
+		assert_eq!(body.stop_timeout, Some(20));
 		let config = body.host_config.unwrap();
 		assert_eq!(config.readonly_rootfs, Some(true));
 		let mounts = config.mounts.unwrap();

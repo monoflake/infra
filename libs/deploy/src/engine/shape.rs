@@ -4,6 +4,7 @@
 
 use super::{
 	DEFAULT_MEMORY_MB, Engine, Error, Manifest, VERSION_LABEL, Version, create_options, network_of,
+	stop_timeout,
 };
 use bollard::models::{
 	ContainerCreateBody, EndpointIpamConfig, EndpointSettings, HostConfig, HostConfigLogConfig,
@@ -235,6 +236,53 @@ pub(crate) fn sandbox(network: String, mounts: Vec<Mount>, memory: i64) -> HostC
 	}
 }
 
+/// What Docker is asked to create for `version` in `shape`: its image, environment, labels, ports
+/// and networks, and the grace a stop gives it. See spec/architecture/host.md, "What a deployment
+/// may ask for is host's decision".
+pub(super) fn container_body(
+	version: &Version,
+	shape: &Shape,
+	env: Vec<String>,
+	host_config: HostConfig,
+	published: &[u16],
+) -> ContainerCreateBody {
+	let recorded = serde_json::to_string(version).unwrap_or_default();
+	ContainerCreateBody {
+		image: Some(version.image.clone()),
+		stop_timeout: stop_timeout(),
+		env: Some(env),
+		// The steward runs as root, so systemd's D-Bus API lets it start a unit, and the door's
+		// pipe takes its word; see platform's spec/architecture/apt.md, "The door", and
+		// packages.md.
+		user: matches!(shape, Shape::Steward { .. }).then(|| "0:0".to_owned()),
+		labels: Some(HashMap::from([
+			("host.app".into(), version.manifest.name.clone()),
+			(VERSION_LABEL.into(), recorded),
+		])),
+		exposed_ports: match shape {
+			Shape::Edge { .. } => Some(EDGE_PORTS.iter().map(|port| (*port).to_owned()).collect()),
+			Shape::Resolver { .. } => {
+				Some(RESOLVER_PORTS.iter().map(|(inside, _)| (*inside).to_owned()).collect())
+			}
+			Shape::Peer { .. } => Some(published.iter().map(|port| format!("{port}/tcp")).collect()),
+			_ => None,
+		},
+		host_config: Some(host_config),
+		networking_config: match shape {
+			Shape::Observer { .. } => None,
+			Shape::Edge { .. } => Some((EDGE_NETWORK.to_owned(), EndpointSettings::default())),
+			Shape::Tunnel { address, address6, .. } => {
+				Some((EDGE_NETWORK.to_owned(), tunnel_endpoint(address, address6.as_deref())))
+			}
+			_ => Some((network_of(&version.manifest.name), EndpointSettings::default())),
+		}
+		.map(|(network, settings)| bollard::models::NetworkingConfig {
+			endpoints_config: Some(HashMap::from([(network, settings)])),
+		}),
+		..Default::default()
+	}
+}
+
 impl Engine {
 	/// Create and start the app's one container. Everything it is allowed is here, whatever its
 	/// declaration says; see spec/architecture/host.md, "What a deployment may ask for is host's
@@ -358,40 +406,7 @@ impl Engine {
 				(config, env.clone())
 			}
 		};
-		let recorded = serde_json::to_string(version).unwrap_or_default();
-		let body = ContainerCreateBody {
-			image: Some(version.image.clone()),
-			env: Some(env),
-			// The steward runs as root, so systemd's D-Bus API lets it start a unit, and the door's
-			// pipe takes its word; see platform's spec/architecture/apt.md, "The door", and
-			// packages.md.
-			user: matches!(shape, Shape::Steward { .. }).then(|| "0:0".to_owned()),
-			labels: Some(HashMap::from([
-				("host.app".into(), name.clone()),
-				(VERSION_LABEL.into(), recorded),
-			])),
-			exposed_ports: match shape {
-				Shape::Edge { .. } => Some(EDGE_PORTS.iter().map(|port| (*port).to_owned()).collect()),
-				Shape::Resolver { .. } => {
-					Some(RESOLVER_PORTS.iter().map(|(inside, _)| (*inside).to_owned()).collect())
-				}
-				Shape::Peer { .. } => Some(published.iter().map(|port| format!("{port}/tcp")).collect()),
-				_ => None,
-			},
-			host_config: Some(host_config),
-			networking_config: match shape {
-				Shape::Observer { .. } => None,
-				Shape::Edge { .. } => Some((EDGE_NETWORK.to_owned(), EndpointSettings::default())),
-				Shape::Tunnel { address, address6, .. } => {
-					Some((EDGE_NETWORK.to_owned(), tunnel_endpoint(address, address6.as_deref())))
-				}
-				_ => Some((network_of(name), EndpointSettings::default())),
-			}
-			.map(|(network, settings)| bollard::models::NetworkingConfig {
-				endpoints_config: Some(HashMap::from([(network, settings)])),
-			}),
-			..Default::default()
-		};
+		let body = container_body(version, shape, env, host_config, &published);
 		let platform = manifest.platform();
 		match shape {
 			Shape::Steward { .. } => self.create_steward(container, platform.as_deref(), body).await?,
