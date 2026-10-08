@@ -254,7 +254,14 @@ process needs, not what the files it handles weigh.
 ### An image is built for speed, and for any node of its architecture
 
 **The same source builds the same image, byte for byte**, so a node can tell an unchanged rebuild
-from a change. `.mise/tasks/image` builds with `SOURCE_DATE_EPOCH=0` -- fixed, not the commit's
+from a change: **an image the app already runs, under the same declaration, is not deployed
+again.** host reads the archive's ids -- `index.json`'s manifest digest, the image's id under the
+containerd store the nodes run, and `manifest.json`'s config digest, its id under the older one --
+from the tar headers before loading anything, and when one is the image the app runs, its
+container is running, it is not held and its declaration is equal, the row closes as skipped,
+"unchanged: run N built the image this node already runs", nothing loaded or restarted. Such a row
+settles the run's app and counts as deployed in the canary's verdict, and keeper does the same for
+host. The first build after reproducibility changed every image once. `.mise/tasks/image` builds with `SOURCE_DATE_EPOCH=0` -- fixed, not the commit's
 time, so an app rebuilt by a later commit without changing comes out the same -- and rewrites every
 layer's timestamps to it; the Rust image is pinned by digest for each toolchain, and a toolchain
 with none pinned stops the build; and rustc runs through sccache by a wrapper of its own, since

@@ -231,7 +231,7 @@ pub async fn from_archive(
 	let admitting = Some(Stage::Admitting);
 	let running = store::Outcome::Running;
 	match host.store.record(name, Action::Deploy, source, None, running, admitting) {
-		Ok(id) => archived(host, id, name, manifest, archive).await,
+		Ok(id) => archived(host, id, name, manifest, archive, None).await,
 		Err(error) => {
 			let _ = tokio::fs::remove_file(archive).await;
 			Err(error.into())
@@ -247,12 +247,23 @@ pub(super) async fn archived(
 	name: &str,
 	manifest: Manifest,
 	archive: &Path,
+	run: Option<u64>,
 ) -> Result<Outcome, Error> {
 	let store = &host.store;
 	let deployed = async {
 		staged(store, id, Stage::Admitting, async { admit(host, name, &manifest) }).await?;
 		// One deploy at a time on a node: two would snapshot, stop and route over each other.
 		let _one = host.deploying.lock().await;
+		// The image it already runs, under the same declaration: nothing to load or restart.
+		let path = archive.to_path_buf();
+		let ids = tokio::task::spawn_blocking(move || deploy::archive::identities(&path));
+		let ids = ids.await.ok().and_then(Result::ok).unwrap_or_default();
+		let current = store.app(name)?;
+		let running = host.engine.running(name).await.unwrap_or(false);
+		if let Some(current) = current.filter(|app| unchanged(&ids, app, &manifest, running)) {
+			skip(host, id, &unchanged_why(run));
+			return Ok(Outcome { name: name.to_owned(), image: current.image, routed: Ok(()) });
+		}
 		let image = staged(store, id, Stage::Loading, async {
 			let file = deploy::uncached::read(archive).await.map_err(Error::Archive)?;
 			let loaded = host.engine.load(name, file).await;
@@ -264,6 +275,25 @@ pub(super) async fn archived(
 	.await;
 	let _ = tokio::fs::remove_file(archive).await;
 	deployed
+}
+
+/// Whether `app` runs the image an archive holds, by one of its `ids`, under `manifest` as it is:
+/// then deploying it would restart it for nothing. A stopped, crashed or held app is deployed.
+pub(super) fn unchanged(
+	ids: &[String],
+	app: &Deployed,
+	manifest: &Manifest,
+	running: bool,
+) -> bool {
+	running && !app.held && ids.contains(&app.image) && app.manifest == *manifest
+}
+
+/// Why a deploy of an unchanged image was passed over: from `run`, or from an upload.
+pub(super) fn unchanged_why(run: Option<u64>) -> String {
+	match run {
+		Some(run) => format!("{}run {run} built the image this node already runs", store::UNCHANGED),
+		None => format!("{}the upload is the image this node already runs", store::UNCHANGED),
+	}
 }
 
 /// Keep what every app runs and what each would go back to; the rest of their images go. host's
@@ -370,6 +400,37 @@ mod tests {
 		// The sidecar's root account is the app's own.
 		let objects = beside.iter().find(|sidecar| sidecar.name == "store-objects").unwrap();
 		assert!(objects.env.contains(&format!("ROOT_ACCESS_KEY_ID={key}")));
+	}
+
+	#[test]
+	fn an_app_already_running_the_image_under_the_same_declaration_is_not_deployed_again() {
+		use super::{unchanged, unchanged_why};
+		use crate::store::Deployed;
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"geo\"\nplacements = [\"rdu\"]\n[container]\nport = 23440\n\
+			 health = \"/health\"\n",
+		)
+		.unwrap();
+		let app = Deployed {
+			manifest: manifest.clone(),
+			image: "sha256:aa".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		// The manifest's digest and the config's, either of which Docker may take as the id.
+		let ids = ["sha256:aa".to_owned(), "sha256:cc".to_owned()];
+		assert!(unchanged(&ids, &app, &manifest, true));
+		assert!(!unchanged(&["sha256:bb".to_owned()], &app, &manifest, true));
+		assert!(!unchanged(&[], &app, &manifest, true));
+		// A changed declaration over the same image is deployed, as is a stopped or held app.
+		let mut declared = manifest.clone();
+		declared.container.as_mut().unwrap().memory_mb = Some(128);
+		assert!(!unchanged(&ids, &app, &declared, true));
+		assert!(!unchanged(&ids, &app, &manifest, false));
+		assert!(!unchanged(&ids, &Deployed { held: true, ..app.clone() }, &manifest, true));
+		assert_eq!(unchanged_why(Some(42)), "unchanged: run 42 built the image this node already runs");
+		assert_eq!(unchanged_why(None), "unchanged: the upload is the image this node already runs");
 	}
 
 	#[tokio::test]

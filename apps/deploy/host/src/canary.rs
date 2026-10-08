@@ -2,7 +2,7 @@
 //! read from its own history and its apps' health now. The asking side is deploy::canary.
 
 use crate::Host;
-use crate::store::{self, Action, Event, Outcome, Store};
+use crate::store::{self, Action, Event, Outcome, Store, UNCHANGED};
 use deploy::canary::{GATED, State, Verdict};
 
 /// How long each app has to answer its health while a verdict is given.
@@ -58,8 +58,11 @@ fn judged(
 			continue;
 		};
 		let detail = deploy.detail.as_deref().and_then(|detail| detail.lines().next()).unwrap_or("");
+		let unchanged = deploy.detail.as_deref().is_some_and(|detail| detail.starts_with(UNCHANGED));
 		let why = match deploy.outcome {
 			Outcome::Succeeded => continue,
+			// The image it already ran, as good as deployed.
+			Outcome::Skipped if unchanged => continue,
 			Outcome::Failed => format!("`{app}` failed on the canary: {detail}"),
 			Outcome::Skipped => format!("`{app}` was passed over on the canary: {detail}"),
 			Outcome::Running => {
@@ -117,6 +120,12 @@ mod tests {
 
 		let host = open("host", &infra(42));
 		store.finish(host, Outcome::Failed, None, Some("not healthy within 60 seconds\nlogs")).unwrap();
+		// keeper rebuilt by a later run unchanged is as good as deployed.
+		let again =
+			store.record("keeper", Action::Deploy, &infra(43), None, Outcome::Running, starting);
+		let why = "unchanged: run 43 built the image this node already runs";
+		store.finish(again.unwrap(), Outcome::Skipped, None, Some(why)).unwrap();
+		assert_eq!(judged(&store, "monoflake/infra", 43, &["keeper"]).unwrap(), None);
 		let failed = judge(&["host", "caddy", "keeper"]).unwrap();
 		assert_eq!(failed.state, State::Failed);
 		assert_eq!(

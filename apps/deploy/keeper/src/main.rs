@@ -184,9 +184,10 @@ async fn upload(State(keeper): State<Arc<Keeper>>, mut parts: Multipart) -> Resp
 		return response::failure_with(StatusCode::BAD_REQUEST, "invalid_upload", "No image part");
 	}
 	match from_archive(&keeper, manifest, &archive).await {
-		Ok(image) => {
-			response::success(StatusCode::OK, serde_json::json!({ "name": "host", "image": image }))
-		}
+		Ok(Placed { image, unchanged }) => response::success(
+			StatusCode::OK,
+			serde_json::json!({ "name": "host", "image": image, "unchanged": unchanged }),
+		),
 		Err(Reply(status, code, message)) => response::failure_with(status, code, message),
 	}
 }
@@ -272,11 +273,23 @@ fn upload_refused(error: impl ToString) -> Response {
 
 /// Load a host archive and put it in place, as an upload or a notice brings one. The archive is
 /// gone afterwards whatever happened.
+/// What a host archive left running: its image, and whether it was the one host already ran.
+struct Placed {
+	image: String,
+	unchanged: bool,
+}
+
+/// Whether host runs the image an archive holds, by one of its `ids`, under `manifest`: then it is
+/// not replaced, which would restart it for nothing. A host that is not running is replaced.
+fn unchanged(ids: &[String], running: Option<&Version>, manifest: &Manifest) -> bool {
+	running.is_some_and(|host| ids.contains(&host.image) && host.manifest == *manifest)
+}
+
 async fn from_archive(
 	keeper: &Keeper,
 	manifest: Manifest,
 	archive: &Path,
-) -> Result<String, Reply> {
+) -> Result<Placed, Reply> {
 	let replaced = async {
 		if let Err(error) = manifest.check_own("host", &keeper.node) {
 			return Err(Reply(
@@ -286,13 +299,24 @@ async fn from_archive(
 			));
 		}
 		let _one = keeper.replacing.lock().await;
+		let path = archive.to_path_buf();
+		let ids = tokio::task::spawn_blocking(move || deploy::archive::identities(&path));
+		let ids = ids.await.ok().and_then(Result::ok).unwrap_or_default();
+		let current = keeper.engine.current("host", &manifest).await.ok().flatten();
+		let running = keeper.engine.running("host").await.unwrap_or(false);
+		if let Some(current) =
+			current.filter(|current| running && unchanged(&ids, Some(current), &manifest))
+		{
+			return Ok(Placed { image: current.image, unchanged: true });
+		}
 		let file = deploy::uncached::read(archive).await.map_err(|e| {
 			Reply(StatusCode::INTERNAL_SERVER_ERROR, "service_unavailable", e.to_string())
 		})?;
 		let loaded = keeper.engine.load("host", file).await;
 		let image = loaded
 			.map_err(|e| Reply(StatusCode::UNPROCESSABLE_ENTITY, "invalid_image", e.to_string()))?;
-		replace_host(keeper, Version { manifest, image }).await
+		let image = replace_host(keeper, Version { manifest, image }).await?;
+		Ok(Placed { image, unchanged: false })
 	}
 	.await;
 	let _ = tokio::fs::remove_file(archive).await;
@@ -401,7 +425,12 @@ async fn from_run(keeper: &Keeper, repository: &str, run: u64, by_hand: bool) ->
 		}
 	};
 	let (replaced, outcome) = match from_archive(keeper, manifest, &fetched.image).await {
-		Ok(image) => {
+		Ok(Placed { image, unchanged: true }) => {
+			eprintln!("keeper: run {run}: host already runs {image}; not replaced");
+			let why = format!("unchanged: run {run} built the image host already runs");
+			(true, ("succeeded", Some(why)))
+		}
+		Ok(Placed { image, .. }) => {
 			eprintln!("keeper: run {run}: host is {image}");
 			(true, ("succeeded", None))
 		}
@@ -500,6 +529,20 @@ mod tests {
 		let busy = super::running_event(&events(&format!("{done},{running}")));
 		assert_eq!(busy.as_deref(), Some("redeploy of caddy"));
 		assert_eq!(super::running_event("not json"), None);
+	}
+
+	#[test]
+	fn host_is_not_replaced_by_the_image_it_runs_under_the_same_declaration() {
+		use deploy::{Manifest, Version};
+		let declared = Manifest::parse(include_str!("../../host/service.toml")).unwrap();
+		let running = Version { manifest: declared.clone(), image: "sha256:aa".into() };
+		let ids = ["sha256:aa".to_owned(), "sha256:cc".to_owned()];
+		assert!(super::unchanged(&ids, Some(&running), &declared));
+		assert!(!super::unchanged(&["sha256:bb".to_owned()], Some(&running), &declared));
+		let mut changed = declared.clone();
+		changed.display_name = Some("Host again".into());
+		assert!(!super::unchanged(&ids, Some(&running), &changed));
+		assert!(!super::unchanged(&ids, None, &declared));
 	}
 
 	#[test]

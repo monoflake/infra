@@ -169,7 +169,7 @@ pub async fn from_run(
 				}
 			}
 		};
-		match archived(&host, id, app, manifest, &image).await {
+		match archived(&host, id, app, manifest, &image, Some(run)).await {
 			Ok(outcome) => eprintln!("host: run {run}: {} is {}", outcome.name, outcome.image),
 			Err(error) => {
 				eprintln!("host: run {run}: {app}: {error}");
@@ -347,13 +347,15 @@ mod tests {
 	#[test]
 	fn a_notice_taken_twice_does_not_deploy_again_what_it_deployed() {
 		let again = format!("run 50 {}", crate::store::BUILT_AGAIN);
+		let same = super::super::version::unchanged_why(Some(42));
 		let (_directory, store) = recorded(&[
 			("geo", Outcome::Succeeded, None),
 			("cron", Outcome::Skipped, Some(&again)),
 			("relay", Outcome::Failed, Some("not healthy")),
+			("apt", Outcome::Skipped, Some(&same)),
 		]);
 		let settled = store.settled(42).unwrap();
-		assert_eq!(settled, ["geo".to_owned(), "cron".to_owned()].into());
+		assert_eq!(settled, ["geo".to_owned(), "cron".to_owned(), "apt".to_owned()].into());
 		let taken = unsettled(vec!["geo", "cron", "relay"], &settled, false, |app| app);
 		assert_eq!(taken, ["relay"]);
 		// By hand, the operator deploys what they name whatever the record says.

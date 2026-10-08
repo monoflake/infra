@@ -143,6 +143,10 @@ impl Source {
 /// the one pass-over that settles an app. See rollout/catch_up.rs.
 pub const BUILT_AGAIN: &str = "built it again, and is the one this node runs";
 
+/// How a deploy passed over because its image is the one the app already runs, with the same
+/// declaration, begins its reason; as good as deployed. See rollout/version.rs, `unchanged`.
+pub const UNCHANGED: &str = "unchanged: ";
+
 /// One app's deploy row from a CI run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Taken {
@@ -631,18 +635,21 @@ impl Store {
 	}
 
 	/// The apps whose deploy from `run` is settled, and so is not done again when a notice of the
-	/// run is taken again: deployed, or passed over because a newer run built it again. A row passed
-	/// over for any other reason -- rolled out by hand, held, placed elsewhere -- or one that failed
-	/// settles nothing, so the operator, or the notice taken again, still deploys it.
+	/// run is taken again: deployed, passed over because a newer run built it again, or passed over
+	/// as unchanged. A row passed over for any other reason -- rolled out by hand, held, placed
+	/// elsewhere -- or one that failed settles nothing, so the operator, or the notice taken again,
+	/// still deploys it.
 	pub fn settled(&self, run: u64) -> Result<std::collections::HashSet<String>, Error> {
 		let connection = lock(&self.history);
 		let mut statement = connection.prepare(
 			"SELECT app FROM events WHERE action = 'deploy' AND json_extract(source, '$.kind') = 'run'
 			AND json_extract(source, '$.run') = ?1
-			AND (outcome = 'succeeded' OR (outcome = 'skipped' AND detail LIKE '% ' || ?2))",
+			AND (outcome = 'succeeded' OR (outcome = 'skipped'
+				AND (detail LIKE '% ' || ?2 OR substr(detail, 1, length(?3)) = ?3)))",
 		)?;
 		let run = i64::try_from(run).unwrap_or(i64::MAX);
-		let rows = statement.query_map(params![run, BUILT_AGAIN], |row| row.get::<_, String>(0))?;
+		let rows =
+			statement.query_map(params![run, BUILT_AGAIN, UNCHANGED], |row| row.get::<_, String>(0))?;
 		Ok(rows.collect::<Result<_, _>>()?)
 	}
 
