@@ -103,6 +103,9 @@ pub struct CaddyConfig {
 	pub tunnel_source: String,
 	/// Its IPv6 address on `edge`, admitted beside it; none where `edge` has no IPv6.
 	pub tunnel_source6: Option<String>,
+	/// The tailnet address of the node whose tunnel carries this one's VPC traffic, its `tunnel_via`,
+	/// admitted and believed on the tunnel's side alone. See spec/architecture/nodes.md.
+	pub via_sources: Vec<String>,
 	pub acme_email: String,
 	pub dns_resolver: String,
 	/// The public gateway's API host, where the private side sends a scope not deployed here.
@@ -117,10 +120,16 @@ pub struct CaddyConfig {
 }
 
 impl CaddyConfig {
-	/// Every address cloudflared stands at on `edge`, the sources admitted to the public suffix and
-	/// believed about a visitor: it reaches Caddy over IPv4 or IPv6, whichever it resolves first.
+	/// Every address cloudflared stands at on `edge`: it reaches Caddy over IPv4 or IPv6, whichever
+	/// it resolves first.
 	pub fn tunnel_sources(&self) -> Vec<String> {
 		std::iter::once(self.tunnel_source.clone()).chain(self.tunnel_source6.clone()).collect()
+	}
+
+	/// The sources admitted to the public suffix and believed about a visitor: this node's own
+	/// cloudflared, and the node's whose tunnel carries this one's VPC traffic.
+	pub fn public_sources(&self) -> Vec<String> {
+		self.tunnel_sources().into_iter().chain(self.via_sources.iter().cloned()).collect()
 	}
 }
 
@@ -182,6 +191,12 @@ impl Config {
 					.collect(),
 				tunnel_source: required("TUNNEL_SOURCE")?,
 				tunnel_source6: std::env::var("TUNNEL_SOURCE6").ok().filter(|value| !value.is_empty()),
+				via_sources: optional("TUNNEL_VIA_SOURCES", "")
+					.split(',')
+					.map(str::trim)
+					.filter(|source| !source.is_empty())
+					.map(str::to_owned)
+					.collect(),
 				acme_email: required("ACME_EMAIL")?,
 				dns_resolver: optional("DNS_RESOLVER", "1.1.1.1"),
 				public_api: optional("PUBLIC_API", "api.monoflake.com"),

@@ -6,7 +6,8 @@
 # egress proxies. `core` marks the three that hold the control plane, `canary = true` the one a new
 # host, keeper or Caddy reaches first. `emulate = ["arm64"]` runs arm64 images on x86 Debian.
 # `grants` adds `app:role` pairs; `tunnel_protocol` (quic, http2, auto) and `tunnel_ip_version`
-# (auto, 4, 6) set the tunnel's. Appended, never inserted: a node's position is its weekly slot.
+# (auto, 4, 6) set the tunnel's; `tunnel_via` names the node whose tunnel carries this one's VPC
+# traffic. Appended, never inserted: a node's position is its weekly slot.
 
 [tyo]
 core = true
@@ -66,3 +67,4 @@ system = "debian"
 emulate = ["arm64"]
 grants = ["database:peer", "quorum:peer", "qq:identity"]
 tunnel_ip_version = 6
+tunnel_via = "tyo"

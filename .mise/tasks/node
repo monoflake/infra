@@ -265,9 +265,7 @@ PRIVATE_SCOPES = "ledger"
 # The secrets every node shares, in secrets.json under these names.
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
-# Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs, PRIVATE_SCOPES, what it emulates, where its canary is, its tunnel's protocol and IP
-# version, and TUNNEL_SOURCE6 on stdin, a line each. Values travel by stdin and environment only,
+# Runs on the node with what `relay` gives it on stdin, a line each, by stdin and environment only,
 # never argv. A file is replaced only when its content differs, and what it holds besides the keys
 # named is kept. Prints `secret`, `host` and `tunnel` each with its state: current, changed or
 # absent.
@@ -286,6 +284,7 @@ read -r version
 read -r source6
 read -r sources
 read -r owned
+read -r via
 upsert() {
 	file=$1
 	shift
@@ -324,7 +323,7 @@ if [ -f "$file" ]; then
 	done
 	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants" "NODE_SLOT=$slot" \
 		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary" "TUNNEL_SOURCE6=$source6" \
-		"DEPLOY_SOURCES=$sources" $owned)"
+		"DEPLOY_SOURCES=$sources" "TUNNEL_VIA_SOURCES=$via" $owned)"
 else
 	echo "host absent"
 fi
@@ -620,13 +619,32 @@ def tunnel_refused(name, node):
 	return None
 
 
+def via_refused(nodes):
+	"""Why a node's `tunnel_via` cannot be: it names another node of nodes.toml, one carrying its own
+	traffic. The tunnel task holds it to the same."""
+	refused = []
+	for name, node in nodes.items():
+		via = node.get("tunnel_via")
+		if via is None:
+			continue
+		if via == name or via not in nodes or "tunnel_via" in nodes[via]:
+			refused.append(f"{name}: tunnel_via names another node with no tunnel_via of its own, not {via!r}")
+	return refused
+
+
+def via_source(node):
+	"""The tailnet IPv4 host's Caddy on `node` believes beside its own tunnel: the node's carrying its
+	VPC traffic, empty where its own tunnel does."""
+	return tailnet_ipv4(node["tunnel_via"]) if "tunnel_via" in node else ""
+
+
 def load_nodes():
 	"""nodes.toml, every node's `domain`, `emulate`, `grants`, `tunnel_protocol` and
 	`tunnel_ip_version`, and the one canary, checked before anything is asked of a machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
 	checks = (domain_refused, emulation_refused, grants_refused, tunnel_refused)
 	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
-	refused += canaries_refused(nodes)
+	refused += canaries_refused(nodes) + via_refused(nodes)
 	if refused:
 		sys.exit("node: " + "\nnode: ".join(refused))
 	return nodes
@@ -684,7 +702,9 @@ def script(name, node, proxies):
 	# The canary's Caddy admits its verdict route from the tailnet alone, so what tailscale forwards
 	# into Docker keeps its 100.x source rather than being masqueraded to the bridge's gateway. The
 	# canary advertises no routes; no other node is changed, since its peers may rely on today's.
-	if node.get("canary") is True:
+	# A node whose VPC traffic another node's tunnel carries is the same: its Caddy believes that
+	# node's tailnet address. Neither advertises routes. See spec/architecture/nodes.md.
+	if node.get("canary") is True or "tunnel_via" in node:
 		lines.append("tailscale set --snat-subnet-routes=false")
 	lines.append("nft -c -f /etc/node/firewall.nft")
 	# Applied under a guard: unless a second session proves the machine is still reachable, the
@@ -787,6 +807,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	canary = canary_of(name, nodes)
 	protocol = nodes[name].get("tunnel_protocol", "")
 	version = tunnel_ip_version(nodes[name])
+	via = via_source(nodes[name])
 	tunnel = "\n".join(
 		f"  write {key}={value} into /data/apps/tunnel/config.env, mode 600, if it differs"
 		if value
@@ -801,7 +822,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
-			f"    TUNNEL_SOURCE6={TUNNEL_SOURCE6} DEPLOY_SOURCES='{DEPLOY_SOURCES}'\n"
+			f"    TUNNEL_SOURCE6={TUNNEL_SOURCE6} DEPLOY_SOURCES='{DEPLOY_SOURCES}' TUNNEL_VIA_SOURCES={via}\n"
 			f"    {' '.join(f'{key}=<redacted>' for key in owner_tokens())}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept\n"
 			f"{tunnel}"
@@ -813,7 +834,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
 		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n{version}\n"
-		f"{TUNNEL_SOURCE6}\n{DEPLOY_SOURCES}\n{owned_line()}\n"
+		f"{TUNNEL_SOURCE6}\n{DEPLOY_SOURCES}\n{owned_line()}\n{via}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:

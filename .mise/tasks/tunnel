@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 #MISE description="Give a node its own tunnel and VPC service: `tunnel <name>|--all [--dry-run]`"
 """Gives each node a Cloudflare Tunnel and a Workers VPC service of its own, both named for the
-node, and puts the tunnel's connector token on the node. Run again it changes nothing. Prints the
-VPC service ids as JSON. See spec/architecture/nodes.md."""
+node, and puts the tunnel's connector token on the node. The service reaches `caddy` through the
+node's own tunnel or, for a node naming `tunnel_via`, its Caddy at its tailnet address through
+that node's tunnel; one that reaches elsewhere is changed in place, keeping the id Workers bind it
+by. Run again it changes nothing. Prints the VPC service ids as JSON. See
+spec/architecture/nodes.md."""
 
 import json
 import os
@@ -16,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 NODES = ROOT / "nodes"
 ACCOUNT = "62163885eb1943e6561e004ac10a5f22"
+# Caddy's port on `edge` and on the node, where the tunnel's side is served.
+CADDY_PORT = 80
 API = f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}"
 
 # Runs on the node with the token on stdin. A btrfs subvolume, since host snapshots each app's.
@@ -79,6 +84,54 @@ def find_service(name):
 	return next((s for s in found if s.get("name") == name), None)
 
 
+def target(tunnel_id, via_tunnel_id=None, address=None):
+	"""Where a node's VPC service sends a request: `caddy` as the node's own tunnel resolves it, or,
+	carried by another node's tunnel, Caddy at the node's tailnet `address`."""
+	if via_tunnel_id is None:
+		return {"hostname": "caddy", "resolver_network": {"tunnel_id": tunnel_id}}
+	return {"ipv4": address, "network": {"tunnel_id": via_tunnel_id}}
+
+
+def body(name, host):
+	"""The VPC service `name` reaching `host`, as created and as changed in place."""
+	return {"type": "http", "name": name, "http_port": CADDY_PORT, "host": host}
+
+
+def pruned(value):
+	"""`value` without the empty fields an answer carries beside what was asked."""
+	if isinstance(value, dict):
+		kept = {key: pruned(inner) for key, inner in value.items()}
+		return {key: inner for key, inner in kept.items() if inner not in (None, [], {})}
+	return value
+
+
+def reaches(service, wanted):
+	"""Whether `service`, as the API answers it, already sends where `wanted` does."""
+	port = service.get("http_port") or CADDY_PORT
+	return port == wanted["http_port"] and pruned(service.get("host")) == pruned(wanted["host"])
+
+
+def via_refused(nodes):
+	"""Why a node's `tunnel_via` cannot be: it names another node of nodes.toml, one carrying its own
+	traffic."""
+	refused = []
+	for name, node in nodes.items():
+		via = node.get("tunnel_via")
+		if via is None:
+			continue
+		if via == name or via not in nodes or "tunnel_via" in nodes[via]:
+			refused.append(f"{name}: tunnel_via names another node with no tunnel_via of its own, not {via!r}")
+	return refused
+
+
+def tailnet_ipv4(name):
+	found = subprocess.run(["tailscale", "ip", "-4", name], text=True, stdout=subprocess.PIPE)
+	address = found.stdout.split()[0] if found.returncode == 0 and found.stdout.split() else None
+	if address is None:
+		sys.exit(f"tunnel: tailscale has no IPv4 for {name}")
+	return address
+
+
 def put_token(name, token):
 	"""The token goes over stdin only, never into the command line or the output."""
 	result = subprocess.run(
@@ -96,8 +149,9 @@ def quote(text):
 	return "'" + text.replace("'", "'\\''") + "'"
 
 
-def wire(name, dry):
-	"""Returns the node's VPC service id, or None where a dry run has nothing to give."""
+def wire(name, dry, via=None):
+	"""Returns the node's VPC service id, or None where a dry run has nothing to give. `via` names
+	the node whose tunnel carries the service."""
 	tunnel = find_tunnel(name)
 	created = tunnel is None
 	if created and not dry:
@@ -110,21 +164,26 @@ def wire(name, dry):
 	tunnel_id = tunnel["id"] if tunnel else None
 	print(f"tunnel: {name}: tunnel {name} {tunnel_id or '-'} {'would be created' if created and dry else 'created' if created else 'found'}")
 
+	if via is None:
+		wanted = body(name, target(tunnel_id))
+	else:
+		carrier = find_tunnel(via)
+		if carrier is None:
+			sys.exit(f"tunnel: {name}: {via} has no tunnel to carry it; run `tunnel {via}` first")
+		wanted = body(name, target(tunnel_id, carrier["id"], tailnet_ipv4(name)))
+		print(f"tunnel: {name}: carried by {via}'s tunnel {carrier['id']}")
 	service = find_service(name)
 	made = service is None
 	if made and not dry:
-		service = call(
-			"POST",
-			"connectivity/directory/services",
-			{
-				"type": "http",
-				"name": name,
-				"http_port": 80,
-				"host": {"hostname": "caddy", "resolver_network": {"tunnel_id": tunnel_id}},
-			},
-		)
+		service = call("POST", "connectivity/directory/services", wanted)
 	service_id = service["service_id"] if service and "service_id" in service else (service or {}).get("id")
 	print(f"tunnel: {name}: vpc service {name} {service_id or '-'} {'would be created' if made and dry else 'created' if made else 'found'}")
+	if not made and not reaches(service, wanted):
+		# Changed in place: Workers bind the service by its id, which a new one would not keep.
+		print(f"tunnel: {name}:   reaches {json.dumps(pruned(service.get('host')))} on {service.get('http_port') or CADDY_PORT}")
+		print(f"tunnel: {name}:   {'would reach' if dry else 'reaches'} {json.dumps(wanted['host'])} on {wanted['http_port']}")
+		if not dry:
+			call("PUT", f"connectivity/directory/services/{service_id}", wanted)
 
 	if dry:
 		print(f"tunnel: {name}: would write TUNNEL_TOKEN to /data/apps/tunnel/secret.env if it differs")
@@ -138,6 +197,8 @@ def main():
 	arguments = sys.argv[1:]
 	dry = "--dry-run" in arguments or "-n" in arguments
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
+	if refused := via_refused(nodes):
+		sys.exit("tunnel: " + "\ntunnel: ".join(refused))
 	names = [a for a in arguments if not a.startswith("-")]
 	if "--all" in arguments:
 		names = list(nodes)
@@ -148,7 +209,7 @@ def main():
 
 	ids = {}
 	for name in names:
-		ids[name] = wire(name, dry)
+		ids[name] = wire(name, dry, nodes[name].get("tunnel_via"))
 	print(json.dumps(ids, indent=2))
 
 

@@ -189,6 +189,21 @@ it changed. A tunnel on `http2` serves its public hostnames but no request throu
 reaches it: `sha` ran `http2` from 02:05 on 2026-10-08 and received nothing by VPC -- no notice from
 the hook, no read from the console -- until it went back to QUIC, so every node runs QUIC.
 
+**A node whose own path to Cloudflare is poor can have its VPC traffic carried by another node's
+tunnel.** `tunnel_via = "<node>"` in `nodes.toml` names it: one other node, which carries its own.
+`mise run tunnel` then points the node's VPC Service at the node's tailnet IPv4 and Caddy's port 80
+through that node's tunnel, changing it in place so the id every Worker binds stays the same; the
+carrier's cloudflared reaches it over the tailnet, as anything on that node does. The node's own
+tunnel stays, so removing the key and running the task again puts the service back. On the carried
+node, tailscale stops masquerading what it forwards (`--snat-subnet-routes=false`, as on the
+canary; neither advertises routes), and host's Caddy admits and believes the carrier's tailnet
+address on the tunnel's side alone, written by `mise run node` as `TUNNEL_VIA_SOURCES`; the LAN's
+side and the private API admit what they did. `sha` is carried by `tyo` since 2026-10-08: its VPC
+requests hung or timed out on its own line to Cloudflare, losing the hook's notices and the
+router's pages. The cost accepted: every container on the carrier leaves it from that address, so
+each could reach the carried node's public names and set `Cf-Connecting-Ip` there; the carrier runs
+only the author's own apps, and a source of cloudflared's own on the carrier would close it.
+
 **The tunnel comes first.** host deploys the tunnel in the run it is handed, and a first deploy
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.

@@ -494,7 +494,7 @@ pub fn render_switched(
 ) -> Value {
 	let public = &config.public_suffix;
 
-	let mut outside = vec![refuse_unless(&config.tunnel_sources())];
+	let mut outside = vec![refuse_unless(&config.public_sources())];
 	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel, switched));
 	outside.push(door(format!("{DOOR}.{public}"), &config.host));
 	for target in interfaces(apps, routes, true, switched) {
@@ -502,9 +502,11 @@ pub fn render_switched(
 	}
 	outside.push(json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }));
 
-	// The visitor's address comes from Cloudflare's header, and only when cloudflared sent it.
+	// The visitor's address comes from Cloudflare's header, and only when cloudflared sent it: the
+	// node's own on either side, the one its VPC traffic comes through on the tunnel's alone.
 	let trusted = json!({ "source": "static", "ranges": config.tunnel_sources() });
 	let private = lan.then(|| private_side(config, apps, routes, &trusted, switched));
+	let believed = json!({ "source": "static", "ranges": config.public_sources() });
 
 	let mut servers = serde_json::Map::new();
 	if let Some((server, _)) = &private {
@@ -523,7 +525,7 @@ pub fn render_switched(
 			"listen": [":80"],
 			"routes": tunnel,
 			"errors": { "routes": [refused()] },
-			"trusted_proxies": trusted,
+			"trusted_proxies": believed,
 			"client_ip_headers": ["Cf-Connecting-Ip"]
 		}),
 	);
@@ -581,6 +583,7 @@ mod tests {
 			private_sources: vec!["10.0.0.0/24".into()],
 			tunnel_source: "172.30.0.20".into(),
 			tunnel_source6: Some("fd34:1053:16bd::20".into()),
+			via_sources: vec![],
 			acme_email: "someone@example.com".into(),
 			dns_resolver: "1.1.1.1".into(),
 			public_api: "api.public.test".into(),
@@ -861,6 +864,29 @@ mod tests {
 		let rendered = render(&four, &[], &[], true);
 		let trusted = &rendered["apps"]["http"]["servers"]["tunnel"]["trusted_proxies"]["ranges"];
 		assert_eq!(*trusted, json!(["172.30.0.20"]));
+	}
+
+	#[test]
+	fn the_node_carrying_the_vpc_traffic_is_admitted_and_believed_on_the_tunnels_side_alone() {
+		let via = CaddyConfig { via_sources: vec!["100.77.53.62".into()], ..config() };
+		let rendered = render(&via, &[geo()], &[], true);
+		let servers = &rendered["apps"]["http"]["servers"];
+		let three = json!(["172.30.0.20", "fd34:1053:16bd::20", "100.77.53.62"]);
+		let guard = &servers["tunnel"]["routes"][1]["handle"][0]["routes"][0];
+		assert_eq!(guard["match"][0]["not"][0]["remote_ip"]["ranges"], three);
+		assert_eq!(servers["tunnel"]["trusted_proxies"]["ranges"], three);
+		// The LAN's side believes the node's own cloudflared alone, as before.
+		let both = json!(["172.30.0.20", "fd34:1053:16bd::20"]);
+		assert_eq!(servers["private"]["trusted_proxies"]["ranges"], both);
+		// The private API is as it was: the own tunnel aborted, then the app networks alone, which
+		// the tailnet address is not among.
+		let unchanged = render(&config(), &[geo()], &[], true);
+		let private_api =
+			|rendered: &Value| rendered["apps"]["http"]["servers"]["tunnel"]["routes"][0].clone();
+		assert_eq!(private_api(&rendered), private_api(&unchanged));
+		assert_eq!(servers["private"], unchanged["apps"]["http"]["servers"]["private"]);
+		// Without one, the tunnel's side is what it was.
+		assert_eq!(config().public_sources(), config().tunnel_sources());
 	}
 
 	#[test]
