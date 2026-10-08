@@ -169,6 +169,16 @@ So the direction is reversed, and trust is moved off the channel.
   missed run that built host goes to keeper on host's network. A run some of whose apps failed
   counts as taken: this recovers notices, not deploys. rdu lost platform's run 37710256103 on
   2026-10-08 while keeper was recreating its host, which is why.
+- **An image is rebuilt only when what goes into it changed.** `deployable` compares each input as a
+  build reads it, between the run's two revisions: Rust source by its tokens, so a comment or a
+  reformat is no change; a Dockerfile, `.dockerignore` and the image task without their comments; a
+  declaration by its value, so a comment there neither rebuilds nor re-declares; a file a binary
+  includes, and what a build script reads, byte for byte. Prose, licenses and a crate's tests,
+  benches and examples go into no image, and an app whose Dockerfile copies the workspace alone is
+  its crate's binary, so nothing else in its directory is an input. The cost is accepted: a binary
+  not rebuilt after a comment or a reformat keeps the line numbers it was built with, so a panic's
+  location and `line!()` may name a line the source has since moved. The platform's `deployable`
+  does the same.
 - **A node's sources are its own to name, each with the scope its runs deploy into**, in
   `DEPLOY_SOURCES` in the node's `.env`, as `owner/name=scope`: today
   `monoflake/infra=infra monoflake/platform=platform canmi21/cue=canmi`, `infra` being infra's own

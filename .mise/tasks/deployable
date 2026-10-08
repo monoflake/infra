@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 #MISE description="The images a change needs rebuilt, as JSON: `deployable [--all] [--since REV | --git BASE [--head REV]] [--files ...]`"
 """An app is deployable when its directory holds a `service.toml` and a `Dockerfile`; one with the
-declaration alone is placed on Workers, which Cloudflare builds. It needs a new image when
-anything under that directory changed but its `service.toml`, when a crate it is built from did --
-a declaration its binary includes among them -- when a package Cargo.lock resolves it to did, or
-when the build itself did. A changed declaration alone needs no image: `--declared` lists those,
-which CI uploads without building. See spec/architecture/host.md, "The machine pulls; nothing
-pushes into it"."""
+declaration alone is placed on Workers, which Cloudflare builds. It needs a new image when what goes
+into it changed, each input read as a build reads it (see fingerprint.py): a crate it is built from,
+a file its binary includes -- a declaration among them -- a package Cargo.lock resolves it to, its
+Dockerfile, or the build itself; an app whose Dockerfile copies more than the workspace takes every
+file in its directory. A changed declaration alone needs no image: `--declared` lists those, which
+CI uploads without building. See spec/architecture/host.md, "The machine pulls; nothing pushes into
+it". A comment or a reformat rebuilds nothing, so a panic's line and `line!()` may lag the
+source."""
 
 import atexit
 import json
@@ -19,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from graph import ROOT, app_directories, app_of, build_inputs, changed, dependents, embedded, owner, rust_graph  # noqa: E402
+from fingerprint import ignored, normalized, same  # noqa: E402
 from resolved import lock_moved, manifest_moved, tree_moved  # noqa: E402
 
 # How every image is built: a change here is a change to all of them.
@@ -26,6 +29,8 @@ EVERY_IMAGE = {".dockerignore", ".mise/tasks/image"}
 # What every image is resolved from, read at both revisions so only the images whose inputs moved
 # are rebuilt; see resolved.py. Given files alone, with no base to read, every image, as above.
 RESOLUTION = {"Cargo.toml", "Cargo.lock"}
+# What a Dockerfile copies from the context when its image is its crate's binary and nothing else.
+WORKSPACE = {"Cargo.toml", "Cargo.lock", "apps", "libs"}
 
 
 def apps():
@@ -123,6 +128,47 @@ def resolution(files, declared, crate_dirs, revisions):
 	return moved
 
 
+def copied(dockerfile):
+	"""What `dockerfile` copies from the build's context, or None where it cannot be told: every
+	source of a `COPY` or `ADD` without `--from`, but an address `ADD` fetches."""
+	sources = set()
+	for line in dockerfile.replace("\\\n", " ").splitlines():
+		words = line.split()
+		if not words or words[0].upper() not in ("COPY", "ADD"):
+			continue
+		if any(word.startswith("[") for word in words):
+			return None
+		if any(word.startswith("--from") for word in words):
+			continue
+		named = [word for word in words[1:] if not word.startswith("--")][:-1]
+		sources |= {word for word in named if "://" not in word}
+	return sources
+
+
+def cargo_built(declared, crate_dirs):
+	"""The apps whose image is their crate's binary alone: a crate of the workspace, with a
+	Dockerfile copying nothing from the context but the workspace."""
+	crates = set(crate_dirs.values())
+	found = set()
+	for app, directory in app_directories().items():
+		if app not in declared or declared[app] not in crates:
+			continue
+		sources = copied((directory / "Dockerfile").read_text())
+		if sources is not None and sources <= WORKSPACE:
+			found.add(app)
+	return found
+
+
+def changes(files, crate_dirs, revisions):
+	"""Those of `files` that change a build: not ignored and, with revisions to read them at, not
+	the same once each is read as a build reads it."""
+	kept = [f for f in files if not ignored(f, crate_dirs)]
+	if revisions is None:
+		return kept
+	base, head = revisions
+	return [f for f in kept if not normalized(f) or not same(f, base.read(f), head.read(f))]
+
+
 def declaration(path):
 	"""Whether `path` is an app's own `service.toml`, directly in its directory."""
 	app = app_of(path)
@@ -131,18 +177,23 @@ def declaration(path):
 
 def needed(files, declared, revisions=None):
 	"""The apps `files` need rebuilt; `revisions` reads a file before and after, as (base, head)."""
-	if any(f in EVERY_IMAGE for f in files):
-		return sorted(declared)
 	crate_dirs, crate_edges, _included = rust_graph()
+	moving = changes(files, crate_dirs, revisions)
+	if any(f in EVERY_IMAGE for f in moving):
+		return sorted(declared)
 	built = build_inputs(crate_dirs)
-	# A file a binary includes outside its tests is that crate's source, a declaration among them.
+	# A file a binary includes outside its tests is that crate's source, a declaration among them,
+	# and is in the binary byte for byte, as is what a build script reads.
 	carried = embedded(crate_dirs)
 	crates, chosen = set(), set()
 	for f in files:
 		crates |= built.get(owner(f, built) or f, set())
 		crates |= carried.get(f, set())
-		if app_of(f) in declared and not declaration(f):
-			chosen.add(app_of(f))
+	binary = cargo_built(declared, crate_dirs)
+	for f in moving:
+		app = app_of(f)
+		if app in declared and not declaration(f) and (app not in binary or f.endswith("/Dockerfile")):
+			chosen.add(app)
 		crate = crate_dirs.get(owner(f, crate_dirs) or "")
 		if crate and (f.endswith(".rs") or f.endswith("/Cargo.toml")):
 			crates.add(crate)
@@ -154,10 +205,12 @@ def needed(files, declared, revisions=None):
 	return sorted(chosen)
 
 
-def redeclared(files, declared, rebuilt):
-	"""The apps whose `service.toml` is among `files` and whose image is not among `rebuilt`: a
-	declaration to apply over the image the node already runs."""
-	touched = {app_of(f) for f in files if declaration(f) and app_of(f) in declared}
+def redeclared(files, declared, rebuilt, revisions=None):
+	"""The apps whose `service.toml` is among `files`, its value changed where `revisions` can tell,
+	and whose image is not among `rebuilt`: a declaration to apply over the image the node already
+	runs."""
+	moving = files if revisions is None else changes(files, (), revisions)
+	touched = {app_of(f) for f in moving if declaration(f) and app_of(f) in declared}
 	return sorted(touched - set(rebuilt))
 
 
@@ -191,7 +244,8 @@ def main():
 			print(json.dumps([]))
 			return 0
 		files, revisions = inputs(arguments)
-		print(json.dumps(redeclared(files, declared, needed(files, declared, revisions))))
+		rebuilt = needed(files, declared, revisions)
+		print(json.dumps(redeclared(files, declared, rebuilt, revisions)))
 		return 0
 	if "--all" in arguments:
 		print(json.dumps(sorted(declared)))
