@@ -44,6 +44,7 @@ pub(super) fn shape_of(host: &Host, manifest: &Manifest) -> Result<Shape, Error>
 pub(super) fn placed(host: &Host) -> Placed<'_> {
 	Placed {
 		tunnel: &host.config.caddy.tunnel_source,
+		tunnel6: host.config.caddy.tunnel_source6.as_deref(),
 		meter: host.volumes.data(crate::node::METER),
 		lan: host.config.resolver.address.as_deref(),
 	}
@@ -51,8 +52,10 @@ pub(super) fn placed(host: &Host) -> Placed<'_> {
 
 /// What a shape is given from the node beside its environment.
 pub(super) struct Placed<'a> {
-	/// The one address Caddy believes a visitor's address from.
+	/// The address Caddy believes a visitor's address from, and its IPv6 beside it where `edge` has
+	/// IPv6.
 	pub(super) tunnel: &'a str,
+	pub(super) tunnel6: Option<&'a str>,
 	/// The meter's data directory, which the reporter shape mounts.
 	pub(super) meter: PathBuf,
 	/// The node's LAN address, which the resolver publishes DNS on; absent where it runs none.
@@ -72,7 +75,11 @@ pub(super) fn shape_named(
 	Ok(match (name, role) {
 		(crate::node::METER, _) => Shape::Observer { env },
 		("caddy", _) => Shape::Edge { env },
-		("tunnel", _) => Shape::Tunnel { env, address: placed.tunnel.to_owned() },
+		("tunnel", _) => Shape::Tunnel {
+			env,
+			address: placed.tunnel.to_owned(),
+			address6: placed.tunnel6.map(str::to_owned),
+		},
 		(RESOLVER, _) => {
 			let address = placed.lan.ok_or(Error::NoLanAddress)?;
 			Shape::Resolver { env, address: address.to_owned() }
@@ -108,6 +115,7 @@ mod tests {
 		use std::path::PathBuf;
 		let placed = || Placed {
 			tunnel: "172.30.0.2",
+			tunnel6: Some("fd34:1053:16bd::20"),
 			meter: PathBuf::from("/data/apps/meter/data"),
 			lan: Some("10.0.0.11"),
 		};
@@ -132,6 +140,9 @@ mod tests {
 		assert!(matches!(relay, Shape::Peer { .. }));
 		let meter = shape_named("meter", None, vec![], placed(), unasked).unwrap();
 		assert!(matches!(meter, Shape::Observer { .. }));
+		let tunnel = shape_named("tunnel", None, vec![], placed(), unasked).unwrap();
+		let Shape::Tunnel { address, address6, .. } = tunnel else { panic!("{tunnel:?}") };
+		assert_eq!((address.as_str(), address6.as_deref()), ("172.30.0.2", Some("fd34:1053:16bd::20")));
 		let resolver = shape_named("resolver", None, vec![], placed(), unasked).unwrap();
 		let Shape::Resolver { address, .. } = resolver else { panic!("{resolver:?}") };
 		assert_eq!(address, "10.0.0.11");

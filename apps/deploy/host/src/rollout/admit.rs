@@ -152,7 +152,12 @@ mod tests {
 		use crate::grants::Role;
 		use std::path::PathBuf;
 		let admits = |name: &str, role: Option<Role>| {
-			let placed = Placed { tunnel: "172.30.0.2", meter: PathBuf::new(), lan: Some("10.0.0.11") };
+			let placed = Placed {
+				tunnel: "172.30.0.2",
+				tunnel6: None,
+				meter: PathBuf::new(),
+				lan: Some("10.0.0.11"),
+			};
 			let shape = shape_named(name, role, vec![], placed, || Ok(vec![])).unwrap();
 			admitted(&shape)
 		};

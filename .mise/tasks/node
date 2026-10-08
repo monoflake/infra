@@ -119,9 +119,10 @@ PRIVATE_SOURCES = "100.64.0.0/10,127.0.0.0/8,172.16.0.0/12"
 # The tunnel's fixed address on `edge`, inside EDGE_SUBNET.
 TUNNEL_SOURCE = "172.30.0.20"
 EDGE_SUBNET = "172.30.0.0/24"
-# `edge`'s IPv6, the same unique local /64 on every node and never routed: the tunnel reaches
-# Cloudflare over IPv6 through Docker's NAT, and still reaches Caddy over IPv4.
+# `edge`'s IPv6, the same unique local /64 on every node and never routed, and the tunnel's fixed
+# address in it: cloudflared may reach Caddy over IPv6, so Caddy trusts this one beside the IPv4.
 EDGE_SUBNET6 = "fd34:1053:16bd::/64"
+TUNNEL_SOURCE6 = "fd34:1053:16bd::20"
 DEPLOY_SOURCES = "monoflake/infra monoflake/platform"
 # The repository and workflow host's own image is built by.
 REPOSITORY = "monoflake/infra"
@@ -149,7 +150,7 @@ chmod 700 /data/apps/caddy
 
 # Runs on the node: `edge` at both subnets, the tunnel's IPv4 address in the first. One at
 # EDGE_SUBNET alone, as every node's was first, cannot be changed in place, so it is made again:
-# who stands on it is written down, taken off and put back, the tunnel at its address, and the
+# who stands on it is written down, taken off and put back, the tunnel at its addresses, and the
 # tunnel is restarted so it dials Cloudflare at once rather than waiting out connections that left
 # with the old bridge. A run cut short puts them back the next time. Prints `edge: ...` lines.
 EDGE = rf"""set -eu
@@ -196,7 +197,7 @@ while read -r member address; do
 	fixed=
 	if [ "${{address%/*}}" = {TUNNEL_SOURCE} ]; then
 		tunnel=$member
-		fixed="--ip {TUNNEL_SOURCE}"
+		fixed="--ip {TUNNEL_SOURCE} --ip6 {TUNNEL_SOURCE6}"
 	fi
 	case "$on" in
 		*" $member "*) ;;
@@ -251,10 +252,11 @@ PRIVATE_SCOPES = "ledger"
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
 # Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs, PRIVATE_SCOPES, what it emulates, where its canary is, and its tunnel's protocol and IP
-# version on stdin, a line each. Values travel by stdin and environment only, never argv. A file is
-# replaced only when its content differs, and what it holds besides the keys named is kept. Prints
-# `secret`, `host` and `tunnel` each with its state: current, changed or absent.
+# needs, PRIVATE_SCOPES, what it emulates, where its canary is, its tunnel's protocol and IP
+# version, and TUNNEL_SOURCE6 on stdin, a line each. Values travel by stdin and environment only,
+# never argv. A file is replaced only when its content differs, and what it holds besides the keys
+# named is kept. Prints `secret`, `host` and `tunnel` each with its state: current, changed or
+# absent.
 RELAY = r"""set -eu
 umask 077
 read -r secret
@@ -267,6 +269,7 @@ read -r emulate
 read -r canary
 read -r protocol
 read -r version
+read -r source6
 upsert() {
 	file=$1
 	shift
@@ -304,7 +307,7 @@ if [ -f "$file" ]; then
 		esac
 	done
 	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants" "NODE_SLOT=$slot" \
-		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary")"
+		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary" "TUNNEL_SOURCE6=$source6")"
 else
 	echo "host absent"
 fi
@@ -772,6 +775,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
+			f"    TUNNEL_SOURCE6={TUNNEL_SOURCE6}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept\n"
 			f"{tunnel}"
 			+ ("\n  if host's .env changed, ask keeper to recreate host on it, as recreate-host does"
@@ -782,6 +786,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
 		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n{version}\n"
+		f"{TUNNEL_SOURCE6}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -818,7 +823,7 @@ def edge_plan():
 	return (
 		f"  make `edge` at {EDGE_SUBNET} and {EDGE_SUBNET6} unless it is there; one at {EDGE_SUBNET}\n"
 		"    alone is made again: its containers taken off and put back, the tunnel at\n"
-		f"    {TUNNEL_SOURCE}, then the tunnel restarted"
+		f"    {TUNNEL_SOURCE} and {TUNNEL_SOURCE6}, then the tunnel restarted"
 	)
 
 
@@ -838,6 +843,7 @@ def environment(name, nodes, token, read_token):
 		"PUBLIC_SUFFIX": PUBLIC_SUFFIX,
 		"PRIVATE_SOURCES": PRIVATE_SOURCES,
 		"TUNNEL_SOURCE": TUNNEL_SOURCE,
+		"TUNNEL_SOURCE6": TUNNEL_SOURCE6,
 		"ACME_EMAIL": os.environ["ACME_EMAIL"],
 		"GITHUB_ACTIONS_TOKEN": os.environ["GITHUB_ACTIONS_TOKEN"],
 		"DEPLOY_SOURCES": DEPLOY_SOURCES,
@@ -883,7 +889,8 @@ def start_host(name, run, dry):
 			f"  write /data/apps/host/.env, mode 600: NODE={name} NODE_SLOT={list(nodes).index(name)}\n"
 			f"    PRIVATE_SCOPES={PRIVATE_SCOPES} PRIVATE_SUFFIX={PRIVATE_SUFFIX}\n"
 			f"    PUBLIC_SUFFIX={PUBLIC_SUFFIX} PRIVATE_SOURCES={PRIVATE_SOURCES}\n"
-			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
+			f"    TUNNEL_SOURCE={TUNNEL_SOURCE} TUNNEL_SOURCE6={TUNNEL_SOURCE6}\n"
+			f"    DEPLOY_SOURCES='{DEPLOY_SOURCES}',\n"
 			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN,\n"
 			f"    GRANTS='{grants(nodes[name])}', EMULATE='{emulated(nodes[name])}',\n"
 			f"    CANARY={canary_of(name, nodes)},\n"

@@ -101,6 +101,8 @@ pub struct CaddyConfig {
 	pub private_sources: Vec<String>,
 	/// cloudflared's address, the one source admitted to the public suffix.
 	pub tunnel_source: String,
+	/// Its IPv6 address on `edge`, admitted beside it; none where `edge` has no IPv6.
+	pub tunnel_source6: Option<String>,
 	pub acme_email: String,
 	pub dns_resolver: String,
 	/// The public gateway's API host, where the private side sends a scope not deployed here.
@@ -112,6 +114,14 @@ pub struct CaddyConfig {
 	pub private_scopes: Vec<String>,
 	/// Whether this node is the canary, whose Caddy answers the others' asks on the tailnet.
 	pub canary: bool,
+}
+
+impl CaddyConfig {
+	/// Every address cloudflared stands at on `edge`, the sources admitted to the public suffix and
+	/// believed about a visitor: it reaches Caddy over IPv4 or IPv6, whichever it resolves first.
+	pub fn tunnel_sources(&self) -> Vec<String> {
+		std::iter::once(self.tunnel_source.clone()).chain(self.tunnel_source6.clone()).collect()
+	}
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -171,6 +181,7 @@ impl Config {
 					.map(|s| s.trim().to_owned())
 					.collect(),
 				tunnel_source: required("TUNNEL_SOURCE")?,
+				tunnel_source6: std::env::var("TUNNEL_SOURCE6").ok().filter(|value| !value.is_empty()),
 				acme_email: required("ACME_EMAIL")?,
 				dns_resolver: optional("DNS_RESOLVER", "1.1.1.1"),
 				public_api: optional("PUBLIC_API", "api.monoflake.com"),

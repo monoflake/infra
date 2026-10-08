@@ -89,6 +89,7 @@ pub(crate) fn testing_with(
 			public_suffix: "outside.test".into(),
 			private_sources: vec![],
 			tunnel_source: "172.30.0.20".into(),
+			tunnel_source6: None,
 			acme_email: "a@example.test".into(),
 			dns_resolver: "1.1.1.1".into(),
 			public_api: "api.public.test".into(),

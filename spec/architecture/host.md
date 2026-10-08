@@ -511,8 +511,11 @@ certificates held in one place.
 ### The tunnel is deployed like any app, at the address Caddy trusts
 
 **cloudflared is `apps/network/tunnel`, deployed by host in a shape its name alone gets**: sandboxed as an
-app is, but standing on `edge` at `tunnel_source` from host's configuration -- the one address
-Caddy believes `Cf-Connecting-Ip` from, so a visitor's address is only ever taken from it. Its
+app is, but standing on `edge` at `tunnel_source` from host's configuration, and at
+`tunnel_source6`, `fd34:1053:16bd::20`, where `edge` has IPv6 -- the two addresses Caddy believes
+`Cf-Connecting-Ip` from, so a visitor's address is only ever taken from the tunnel. Both are needed:
+Workers VPC resolves `caddy` through the tunnel and reaches it over IPv6 when it can, and a Caddy
+trusting the IPv4 alone refused every such request, as it did on all eight nodes on 2026-10-08. Its
 routes are the dashboard's, a remotely-managed tunnel; its token is `TUNNEL_TOKEN` in its
 `secret.env`; its health is its metrics server's `/ready`, on its port, which host reaches by
 standing on `edge` too. A tunnel that is down closes the public side and the notices CI sends, so

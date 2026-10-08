@@ -32,10 +32,11 @@ pub enum Shape {
 	/// host writes, read-only; no capability but binding a low port. See
 	/// spec/architecture/host.md, "Caddy is deployed like any app, and is the one door".
 	Edge { env: Vec<String> },
-	/// The tunnel only: sandboxed, on the `edge` network at `address`, the one address Caddy
-	/// believes a visitor's address from. See spec/architecture/host.md, "The tunnel is deployed like
-	/// any app, at the address Caddy trusts".
-	Tunnel { env: Vec<String>, address: String },
+	/// The tunnel only: sandboxed, on the `edge` network at `address`, and at `address6` where
+	/// `edge` has IPv6 -- the addresses Caddy believes a visitor's address from, since cloudflared
+	/// reaches it over either. See spec/architecture/host.md, "The tunnel is deployed like any app,
+	/// at the address Caddy trusts".
+	Tunnel { env: Vec<String>, address: String, address6: Option<String> },
 	/// The scheduler, `cron` here: sandboxed like any app, on its own network, plus a bind of each
 	/// socket-served service's data directory at `/sockets/<service>`. See platform's
 	/// spec/architecture/cron.md, "host gives `cron` the table".
@@ -68,6 +69,17 @@ impl Shape {
 
 /// The network the edge shape stands on, shared with cloudflared.
 pub const EDGE_NETWORK: &str = "edge";
+
+/// The tunnel on `edge` at its fixed addresses, the ones Caddy trusts: a Docker-assigned IPv6 would
+/// be one Caddy refuses, which every request over IPv6 then is.
+pub(super) fn tunnel_endpoint(address: &str, address6: Option<&str>) -> EndpointSettings {
+	let fixed = EndpointIpamConfig {
+		ipv4_address: Some(address.to_owned()),
+		ipv6_address: address6.map(str::to_owned),
+		..Default::default()
+	};
+	EndpointSettings { ipam_config: Some(fixed), ..Default::default() }
+}
 
 /// What the edge shape publishes on the machine: HTTP, HTTPS, and HTTPS over QUIC.
 pub const EDGE_PORTS: [&str; 3] = ["80/tcp", "443/tcp", "443/udp"];
@@ -370,11 +382,8 @@ impl Engine {
 			networking_config: match shape {
 				Shape::Observer { .. } => None,
 				Shape::Edge { .. } => Some((EDGE_NETWORK.to_owned(), EndpointSettings::default())),
-				Shape::Tunnel { address, .. } => {
-					let fixed =
-						EndpointIpamConfig { ipv4_address: Some(address.clone()), ..Default::default() };
-					let settings = EndpointSettings { ipam_config: Some(fixed), ..Default::default() };
-					Some((EDGE_NETWORK.to_owned(), settings))
+				Shape::Tunnel { address, address6, .. } => {
+					Some((EDGE_NETWORK.to_owned(), tunnel_endpoint(address, address6.as_deref())))
 				}
 				_ => Some((network_of(name), EndpointSettings::default())),
 			}

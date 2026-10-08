@@ -196,6 +196,16 @@ fn the_reporter_shape_mounts_the_meters_directory_read_only() {
 }
 
 #[test]
+fn the_tunnel_stands_on_edge_at_both_of_its_fixed_addresses() {
+	let both = tunnel_endpoint("172.30.0.20", Some("fd34:1053:16bd::20")).ipam_config.unwrap();
+	assert_eq!(both.ipv4_address.as_deref(), Some("172.30.0.20"));
+	assert_eq!(both.ipv6_address.as_deref(), Some("fd34:1053:16bd::20"));
+	// An `edge` without IPv6 is asked for no IPv6 address, which Docker would refuse there.
+	let four = tunnel_endpoint("172.30.0.20", None).ipam_config.unwrap();
+	assert_eq!((four.ipv4_address.as_deref(), four.ipv6_address), (Some("172.30.0.20"), None));
+}
+
+#[test]
 fn the_peer_shape_publishes_each_port_on_every_address_at_the_same_number() {
 	let published = peer_ports(&[2379, 2380]);
 	assert_eq!(published.len(), 2);

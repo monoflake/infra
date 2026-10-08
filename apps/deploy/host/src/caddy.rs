@@ -313,7 +313,7 @@ pub fn private_api_host(config: &CaddyConfig) -> String {
 fn private_api(config: &CaddyConfig, apps: &[Deployed], switched: &Switched) -> Value {
 	let host = private_api_host(config);
 	let tunnel = json!({
-		"match": [{ "remote_ip": { "ranges": [config.tunnel_source] } }],
+		"match": [{ "remote_ip": { "ranges": config.tunnel_sources() } }],
 		"handle": [{ "handler": "static_response", "abort": true }]
 	});
 	let unclaimed = json!({ "handle": [{ "handler": "headers", "request": {
@@ -494,7 +494,7 @@ pub fn render_switched(
 ) -> Value {
 	let public = &config.public_suffix;
 
-	let mut outside = vec![refuse_unless(std::slice::from_ref(&config.tunnel_source))];
+	let mut outside = vec![refuse_unless(&config.tunnel_sources())];
 	outside.push(api_host(format!("api.{public}"), apps, Side::Tunnel, switched));
 	outside.push(door(format!("{DOOR}.{public}"), &config.host));
 	for target in interfaces(apps, routes, true, switched) {
@@ -503,7 +503,7 @@ pub fn render_switched(
 	outside.push(json!({ "handle": [{ "handler": "static_response", "status_code": 404 }] }));
 
 	// The visitor's address comes from Cloudflare's header, and only when cloudflared sent it.
-	let trusted = json!({ "source": "static", "ranges": [config.tunnel_source] });
+	let trusted = json!({ "source": "static", "ranges": config.tunnel_sources() });
 	let private = lan.then(|| private_side(config, apps, routes, &trusted, switched));
 
 	let mut servers = serde_json::Map::new();
@@ -580,6 +580,7 @@ mod tests {
 			public_suffix: "outside.test".into(),
 			private_sources: vec!["10.0.0.0/24".into()],
 			tunnel_source: "172.30.0.20".into(),
+			tunnel_source6: Some("fd34:1053:16bd::20".into()),
 			acme_email: "someone@example.com".into(),
 			dns_resolver: "1.1.1.1".into(),
 			public_api: "api.public.test".into(),
@@ -840,6 +841,29 @@ mod tests {
 	}
 
 	#[test]
+	fn the_tunnel_is_admitted_and_believed_at_both_of_its_addresses() {
+		let both = json!(["172.30.0.20", "fd34:1053:16bd::20"]);
+		let rendered = render(&config(), &[], &[], true);
+		let servers = &rendered["apps"]["http"]["servers"];
+		// The public suffix admits it alone, at either address.
+		let guard = &servers["tunnel"]["routes"][1]["handle"][0]["routes"][0];
+		assert_eq!(guard["match"][0]["not"][0]["remote_ip"]["ranges"], both);
+		// The private API refuses it at either.
+		let private_api = &servers["tunnel"]["routes"][0]["handle"][0]["routes"][0];
+		assert_eq!(private_api["match"][0]["remote_ip"]["ranges"], both);
+		assert_eq!(private_api["handle"][0]["abort"], true);
+		// Both servers take Cloudflare's header from it, and from nothing else.
+		for server in ["tunnel", "private"] {
+			assert_eq!(servers[server]["trusted_proxies"]["ranges"], both);
+		}
+		// A node whose `edge` has no IPv6 names the one address, as before.
+		let four = CaddyConfig { tunnel_source6: None, ..config() };
+		let rendered = render(&four, &[], &[], true);
+		let trusted = &rendered["apps"]["http"]["servers"]["tunnel"]["trusted_proxies"]["ranges"];
+		assert_eq!(*trusted, json!(["172.30.0.20"]));
+	}
+
+	#[test]
 	fn a_route_appears_on_the_sides_it_asks_for() {
 		let nas = Route {
 			name: "nas".into(),
@@ -1072,7 +1096,7 @@ mod tests {
 			r#""upstreams":[{"dial":"10.0.0.21:80"}]}]}]}],"match":[{"host":["nas.inside.test"]}]},"#,
 			r#"{"handle":[{"abort":true,"handler":"static_response"}]}]}],"#,
 			r#""match":[{"host":["*.inside.test"]}],"terminal":true}],"#,
-			r#""trusted_proxies":{"ranges":["172.30.0.20"],"source":"static"}}"#,
+			r#""trusted_proxies":{"ranges":["172.30.0.20","fd34:1053:16bd::20"],"source":"static"}}"#,
 		);
 		assert_eq!(text(&rendered["apps"]["http"]["servers"]["private"]), private);
 		let tls = concat!(

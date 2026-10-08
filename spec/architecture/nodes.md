@@ -171,7 +171,8 @@ chain drops a translated connection that did not come in on a trusted interface,
 proven before it was adopted. `mise run node` makes it so, and moves a node's IPv4-only `edge` over
 by saving its members, recreating it and reconnecting them, the tunnel at its fixed address,
 then restarting the tunnel -- a few seconds of the public door -- and picks up a run cut short. The
-tunnel still reaches Caddy over IPv4, so Caddy's trust in it is unchanged. Creating the first IPv6
+tunnel stands at a fixed IPv6 beside its fixed IPv4 and Caddy trusts both -- [host.md](host.md),
+"The tunnel is deployed like any app, at the address Caddy trusts". Creating the first IPv6
 network turns IPv6 forwarding on; no node lost its IPv6 route to that, since none relies on the
 kernel accepting router advertisements with `accept_ra = 1`.
 
