@@ -125,7 +125,6 @@ REPOSITORY = "monoflake/infra"
 WORKFLOW = "deploy.yml"
 # host's PORT in apps/deploy/host/src/config.rs. It publishes none, so is reached on its network.
 HOST_PORT = 11011
-CURL = "curlimages/curl:8.11.1"
 # How long the host container gets to be running after `docker compose up`.
 WAIT_SECONDS = 60
 # The secrets host and Caddy are given, read from the environment mise loads secrets.json into.
@@ -249,6 +248,32 @@ if [ -f "$file" ]; then
 else
 	echo "host absent"
 fi
+"""
+
+# Runs on the node with the notice on stdin: POSTs it to host at its address on its own network,
+# app-host, where it listens once it has joined it after starting, with the machine's own curl --
+# busybox's wget on a machine without one -- and never an image, which a node that cannot reach
+# Docker Hub could not pull. Tries for thirty seconds; prints host's answer.
+NOTICE = rf"""set -eu
+read -r notice
+on='{{{{with index .NetworkSettings.Networks "app-host"}}}}{{{{.IPAddress}}}}{{{{end}}}}'
+post() {{
+	address=$(docker inspect -f "$on" host)
+	[ -n "$address" ] || return 1
+	url="http://$address:{HOST_PORT}/notice"
+	if command -v curl >/dev/null; then
+		curl -sS --max-time 10 -X POST -H 'content-type: application/json' --data "$notice" "$url"
+	else
+		wget -q -T 10 -O - --header 'content-type: application/json' --post-data "$notice" "$url"
+	fi
+}}
+i=0
+until answer=$(post); do
+	i=$((i + 1))
+	[ "$i" -lt 30 ] || {{ echo "host answered nothing on app-host" >&2; exit 1; }}
+	sleep 1
+done
+printf '%s\n' "$answer"
 """
 
 WAIT = rf"""i=0
@@ -702,7 +727,8 @@ def start_host(name, run, dry):
 			f"    CANARY={canary_of(name, nodes)},\n"
 			"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
-			f"  POST {notice} to http://host:{HOST_PORT}/notice from {CURL}"
+			f"  POST {notice} to host's address on app-host, port {HOST_PORT}, /notice, with the\n"
+			"    machine's own curl, or wget where there is none; no image is pulled"
 		)
 		relay(name, name, nodes, peers, shared, dry, recreate=False)
 		return
@@ -743,18 +769,8 @@ def start_host(name, run, dry):
 	if ssh(name, "sh -s", WAIT) != 0:
 		sys.exit(f"node: host on {name} is not running after {WAIT_SECONDS}s")
 
-	networks = "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}"
-	network = ssh_output(name, f"docker inspect host -f '{networks}'")
-	if not network:
-		sys.exit(f"node: host on {name} is on no network")
 	# host_replaced: a run that rebuilt host otherwise waits for keeper, which a fresh node lacks.
-	post = [
-		"docker", "run", "--rm", "--network", network.split()[0], CURL,
-		"-sS", "--retry", "10", "--retry-connrefused", "--retry-delay", "1",
-		"-X", "POST", "-H", "content-type: application/json", "--data", notice,
-		f"http://host:{HOST_PORT}/notice",
-	]
-	answer = ssh_output(name, shlex.join(post))
+	answer = ssh_output(name, f"sh -c {shlex.quote(NOTICE)}", notice + "\n")
 	if answer is None:
 		sys.exit(f"node: host on {name} did not take run {run}")
 	print(f"node: host on {name} answered {answer}")

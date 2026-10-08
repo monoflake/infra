@@ -146,7 +146,10 @@ locks the session out undoes itself.
 first host.** The first gives the node a tunnel and a Workers VPC service of its own name, the VPC
 service reaching Caddy through that tunnel as `rdu`'s does, and puts the tunnel's token on the node.
 The second loads host's image from the newest CI run, starts it from its compose file with the
-node's `.env`, and hands it that run, so host deploys the rest. It hands the run as one keeper has
+node's `.env`, and hands it that run, so host deploys the rest -- posted with the machine's own curl,
+or wget, to host's address on its network. **Setting a node up pulls no image**: Docker Hub is not
+reachable from every node, `sha` in Shanghai first, and every image a node runs arrives as a run's
+artifact. It hands the run as one keeper has
 already passed on: a run that rebuilt host makes host wait for keeper, and a fresh node has none
 until host deploys it.
 
