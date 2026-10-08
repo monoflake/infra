@@ -24,3 +24,14 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
   cannot run -- [architecture/nodes.md](architecture/nodes.md), "An x86 node may run arm64 images,
   emulated, and never the other way", and [architecture/host.md](architecture/host.md), "An app may
   ask for one architecture". `buf` first, for the platform's Postgres.
+- **A deploy belongs to a scope**, decided on 2026-10-08 so a second owner's repository can be a
+  source without reaching another's apps -- platform's `spec/architecture/scheduling.md`, "A scope is
+  an organization, and only the boundary isolates". In two phases:
+  - **Done on 2026-10-08**: each source carries its scope, and each app the scope that first deployed
+    it -- [architecture/host.md](architecture/host.md), "The machine pulls; nothing pushes into it".
+    The first app of another scope is `qq`, from the author's private `canmi21/cue`, on `sha`. The
+    sources and tokens move to the platform's configuration later -- platform's
+    `spec/issues/scheduling.md`, "Which repositories deploy, and with whose token, is written into
+    code".
+  - **Later, with accounts**: two scopes may hold one name, every container, network, data directory
+    and route keyed by scope and name.

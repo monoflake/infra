@@ -227,11 +227,26 @@ pub async fn from_archive(
 	manifest: Manifest,
 	archive: &Path,
 	source: &Source,
+	scope: Option<&str>,
 ) -> Result<Outcome, Error> {
 	let admitting = Some(Stage::Admitting);
 	let running = store::Outcome::Running;
 	match host.store.record(name, Action::Deploy, source, None, running, admitting) {
-		Ok(id) => archived(host, id, name, manifest, archive, None).await,
+		Ok(id) => {
+			// The scope an upload names, else the one the app has, else infra's for its own names.
+			let resolved = match scope {
+				Some(scope) => Ok(scope.to_owned()),
+				None => uploaded_scope(host, name),
+			};
+			let scope = match staged(&host.store, id, Stage::Admitting, async { resolved }).await {
+				Ok(scope) => scope,
+				Err(error) => {
+					let _ = tokio::fs::remove_file(archive).await;
+					return Err(error);
+				}
+			};
+			archived(host, id, name, manifest, archive, None, &scope).await
+		}
 		Err(error) => {
 			let _ = tokio::fs::remove_file(archive).await;
 			Err(error.into())
@@ -248,10 +263,11 @@ pub(super) async fn archived(
 	manifest: Manifest,
 	archive: &Path,
 	run: Option<u64>,
+	scope: &str,
 ) -> Result<Outcome, Error> {
 	let store = &host.store;
 	let deployed = async {
-		staged(store, id, Stage::Admitting, async { admit(host, name, &manifest) }).await?;
+		staged(store, id, Stage::Admitting, async { admit(host, name, &manifest, scope) }).await?;
 		// One deploy at a time on a node: two would snapshot, stop and route over each other.
 		let _one = host.deploying.lock().await;
 		// The image it already runs, under the same declaration: nothing to load or restart.
@@ -270,11 +286,26 @@ pub(super) async fn archived(
 			loaded.map_err(Error::Load)
 		})
 		.await?;
-		deploy(host, id, manifest, image).await
+		let deployed = deploy(host, id, manifest, image).await?;
+		// The first deploy of an app makes it its scope's.
+		store.claim(name, scope)?;
+		Ok(deployed)
 	}
 	.await;
 	let _ = tokio::fs::remove_file(archive).await;
 	deployed
+}
+
+/// The scope an upload naming none deploys `name` into: the one it is recorded as, or infra's for
+/// infra's own names. A new app other than those is refused, its scope unsaid.
+fn uploaded_scope(host: &Host, name: &str) -> Result<String, Error> {
+	if let Some(recorded) = host.store.scope_of(name)? {
+		return Ok(recorded);
+	}
+	if deploy::manifest::OWN.contains(&name) {
+		return Ok(deploy::github::INFRA_SCOPE.to_owned());
+	}
+	Err(Error::NoScope(name.to_owned()))
 }
 
 /// Whether `app` runs the image an archive holds, by one of its `ids`, under `manifest` as it is:
@@ -327,8 +358,15 @@ mod tests {
 		)
 		.unwrap();
 		let archive = directory.path().join("never-read.tar");
-		let refused =
-			super::from_archive(&host, "database", manifest, &archive, &Source::upload()).await;
+		let refused = super::from_archive(
+			&host,
+			"database",
+			manifest,
+			&archive,
+			&Source::upload(),
+			Some("platform"),
+		)
+		.await;
 		let Err(error @ Error::Unrunnable { .. }) = refused else { panic!("{refused:?}") };
 		assert!(error.to_string().contains("EMULATE=arm64"), "{error}");
 		let [event] = host.store.events(None, None, 50).unwrap().try_into().unwrap();
@@ -350,9 +388,15 @@ mod tests {
 		let directory = tempfile::tempdir().unwrap();
 		let archive = directory.path().join("never-read.tar");
 		let ungranted = crate::testing(directory.path());
-		let refused =
-			super::from_archive(&ungranted, "qq", qq("02:00:00:00:00:01"), &archive, &Source::upload())
-				.await;
+		let refused = super::from_archive(
+			&ungranted,
+			"qq",
+			qq("02:00:00:00:00:01"),
+			&archive,
+			&Source::upload(),
+			Some("canmi"),
+		)
+		.await;
 		assert!(matches!(refused, Err(Error::Refused(_))), "{refused:?}");
 
 		let directory = tempfile::tempdir().unwrap();
@@ -370,8 +414,15 @@ mod tests {
 			held: false,
 		};
 		host.store.put_app(&held).unwrap();
-		let taken =
-			super::from_archive(&host, "qq", qq("02:00:00:00:00:01"), &archive, &Source::upload()).await;
+		let taken = super::from_archive(
+			&host,
+			"qq",
+			qq("02:00:00:00:00:01"),
+			&archive,
+			&Source::upload(),
+			Some("platform"),
+		)
+		.await;
 		let Err(error @ Error::MacTaken { .. }) = taken else { panic!("{taken:?}") };
 		assert_eq!(
 			error.to_string(),
@@ -379,6 +430,87 @@ mod tests {
 		);
 		let [event] = host.store.events(None, None, 50).unwrap().try_into().unwrap();
 		assert_eq!((event.outcome, event.stage), (Outcome::Failed, Some(Stage::Admitting)));
+	}
+
+	#[tokio::test]
+	async fn a_deploy_from_another_scope_than_the_apps_is_refused_before_anything_stops() {
+		use crate::store::Deployed;
+		let geo = || {
+			deploy::Manifest::parse(
+				"version = 1\nname = \"geo\"\nplacements = [\"rdu\"]\n[container]\nport = 23440\n\
+				 health = \"/health\"\n",
+			)
+			.unwrap()
+		};
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let archive = directory.path().join("never-read.tar");
+		let deployed = Deployed {
+			manifest: geo(),
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		host.store.put_app(&deployed).unwrap();
+		host.store.claim("geo", "platform").unwrap();
+		let upload = Source::upload();
+		let refused = super::from_archive(&host, "geo", geo(), &archive, &upload, Some("canmi")).await;
+		let Err(error @ Error::OutOfScope { .. }) = refused else { panic!("{refused:?}") };
+		assert_eq!(error.to_string(), "`geo` is `platform`'s, and `canmi` may not deploy it");
+		let [event] = host.store.events(None, None, 50).unwrap().try_into().unwrap();
+		assert_eq!((event.outcome, event.stage), (Outcome::Failed, Some(Stage::Admitting)));
+
+		// Infra's own names from no other scope, even unrecorded.
+		let mut caddy = geo();
+		caddy.name = "caddy".into();
+		let refused =
+			super::from_archive(&host, "caddy", caddy, &archive, &upload, Some("platform")).await;
+		assert!(
+			matches!(refused, Err(Error::OutOfScope { ref holder, .. }) if holder == "infra"),
+			"{refused:?}"
+		);
+
+		// An upload naming no scope of a new app is refused; of a recorded one it takes the app's.
+		let mut fresh = geo();
+		fresh.name = "fresh".into();
+		let unsaid = super::from_archive(&host, "fresh", fresh, &archive, &upload, None).await;
+		assert!(matches!(unsaid, Err(Error::NoScope(_))), "{unsaid:?}");
+		assert_eq!(super::uploaded_scope(&host, "geo").unwrap(), "platform");
+		assert_eq!(super::uploaded_scope(&host, "keeper").unwrap(), "infra");
+	}
+
+	#[tokio::test]
+	async fn a_declaration_from_another_scope_than_the_apps_is_refused_too() {
+		use crate::rollout::redeclare::redeclare;
+		use crate::store::Deployed;
+		let manifest = deploy::Manifest::parse(
+			"version = 1\nname = \"geo\"\nplacements = [\"rdu\"]\n[container]\nport = 23440\n\
+			 health = \"/health\"\n",
+		)
+		.unwrap();
+		let directory = tempfile::tempdir().unwrap();
+		let host = crate::testing(directory.path());
+		let deployed = Deployed {
+			manifest: manifest.clone(),
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		host.store.put_app(&deployed).unwrap();
+		host.store.claim("geo", "platform").unwrap();
+		let source = Source::run(42, None).of("canmi21/cue");
+		let id = host.store.record(
+			"geo",
+			Action::Deploy,
+			&source,
+			None,
+			Outcome::Running,
+			Some(Stage::Admitting),
+		);
+		let refused = redeclare(&host, id.unwrap(), manifest, "canmi").await;
+		assert!(matches!(refused, Err(Error::OutOfScope { .. })));
 	}
 
 	#[test]

@@ -169,15 +169,28 @@ So the direction is reversed, and trust is moved off the channel.
   missed run that built host goes to keeper on host's network. A run some of whose apps failed
   counts as taken: this recovers notices, not deploys. rdu lost platform's run 37710256103 on
   2026-10-08 while keeper was recreating its host, which is why.
-- **A node's sources are its own to name**, in `DEPLOY_SOURCES` in the node's `.env`, as
-  `owner/name` pairs: a run is numbered within its repository, so a notice names the repository
-  with the run, and one that names a repository the node does not list is refused before GitHub is
-  asked. Without the list a node deploys nothing rather than guessing; today it is
-  `monoflake/infra monoflake/platform`. The hook keeps a list of its own, `DEPLOY_SOURCES` exported
-  by the platform's `@monoflake/sdk`, the same two, to pass on only what some node might take; the
-  node's decides. A repository outside the organization, such as `canmi21/web`, cannot be a source
-  without a second token. A notice that names no repository, from before they did, means the
-  node's source only on a node with one; a node with two refuses it.
+- **A node's sources are its own to name, each with the scope its runs deploy into**, in
+  `DEPLOY_SOURCES` in the node's `.env`, as `owner/name=scope`: today
+  `monoflake/infra=infra monoflake/platform=platform canmi21/cue=canmi`, `infra` being infra's own
+  and no scope -- platform's `spec/architecture/scheduling.md`, "A scope is an organization, and
+  only the boundary isolates". The scope is the node's to say and never a declaration's. A run is
+  numbered within its repository, so a notice names the repository with the run, and one that
+  names a repository the node does not list is refused before GitHub is asked. Without the list a
+  node deploys nothing rather than guessing; a bare `owner/name`, as nodes wrote before scopes,
+  deploys into the scope it is named as. The hook keeps a list of its own, `DEPLOY_SOURCES` exported
+  by the platform's `@monoflake/sdk`, to pass on only what some node might take; the node's
+  decides. A repository outside the organization is read with its owner's own token,
+  `GITHUB_ACTIONS_TOKEN_<OWNER>` in the node's `.env` -- `_CANMI21` for `canmi21/cue` -- as the
+  platform's deployer names it, and with `GITHUB_ACTIONS_TOKEN` otherwise. A notice that names no
+  repository, from before they did, means the node's source only on a node with one; a node with
+  two refuses it.
+- **An app belongs to the scope that first deployed it, and no other scope's run replaces it.**
+  host records each app's scope at its first deploy and refuses, before stopping anything, a deploy,
+  a re-declaration or a by-hand deploy of it from a source of another scope; infra's own names are
+  `infra`'s alone, and keeper takes runs of `infra` only. An upload of a new app names its scope.
+  The apps on the nodes before scopes were recorded as `infra`'s for infra's own names and the
+  platform's otherwise. Two scopes holding one name is the next step -- [../todo.md](../todo.md), "A
+  deploy belongs to a scope".
 
 **Rejected: verifying a Sigstore attestation of each archive.** An attestation proves an artifact came
 from a given repository's workflow on a given ref, which is what matters when the artifact is taken

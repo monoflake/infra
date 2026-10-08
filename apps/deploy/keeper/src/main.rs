@@ -460,6 +460,10 @@ async fn notice(State(keeper): State<Arc<Keeper>>, Json(notice): Json<Notice>) -
 /// canary passed the run, unless it is sent by hand. True when nothing failed.
 async fn from_run(keeper: &Keeper, repository: &str, run: u64, by_hand: bool) -> bool {
 	let Some(github) = keeper.github.as_ref() else { return false };
+	// host is infra's own, and only infra's repository deploys it, whatever another's run built.
+	if github.scope_of(repository) != Some(deploy::github::INFRA_SCOPE) {
+		return true;
+	}
 	let artifacts = match github.artifacts(repository, run).await {
 		Ok(built) => built.artifacts,
 		Err(error) => {

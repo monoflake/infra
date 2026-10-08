@@ -93,7 +93,7 @@ pub async fn every(host: Arc<Host>) {
 /// leave no row to say they were looked at.
 async fn pass(host: &Arc<Host>, empty: &mut HashSet<u64>) {
 	let Some(github) = host.github.as_ref() else { return };
-	for repository in github.sources() {
+	for repository in github.sources().iter().map(|source| source.repository.as_str()) {
 		let recent = match github.recent(repository, WITHIN).await {
 			Ok(recent) => recent,
 			Err(error) => {

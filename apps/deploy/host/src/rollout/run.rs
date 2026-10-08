@@ -37,6 +37,11 @@ pub async fn from_run(
 		}
 	};
 	let commit = built.commit.clone();
+	// The scope the node says this repository's runs deploy into; never the declaration's to say.
+	let Some(scope) = github.scope_of(repository).map(str::to_owned) else {
+		eprintln!("host: run {run}: {repository} is no source of this node's");
+		return true;
+	};
 	// Read apart when the run uploaded them, so nothing placed elsewhere, held or rolled out by hand
 	// is downloaded at all; a run from before reads each from its image.
 	let declared = match &built.declarations {
@@ -68,6 +73,12 @@ pub async fn from_run(
 	let overridden = by_hand || only.is_some();
 	let artifacts = unsettled(artifacts, &settled, overridden, |artifact| artifact.app.as_str());
 	let redeclared = unsettled(redeclared, &settled, overridden, String::as_str);
+	// host is keeper's to deploy, and only from infra's own repository: another scope's run that
+	// built one is not waited on, and keeper leaves it alone too.
+	let artifacts: Vec<_> = artifacts
+		.into_iter()
+		.filter(|artifact| artifact.app != "host" || scope == deploy::github::INFRA_SCOPE)
+		.collect();
 	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
 		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
 		// Not taken, so the notice keeper sends afterwards is.
@@ -195,7 +206,7 @@ pub async fn from_run(
 				}
 			}
 		};
-		match archived(&host, id, app, manifest, &image, Some(run)).await {
+		match archived(&host, id, app, manifest, &image, Some(run), &scope).await {
 			Ok(outcome) => eprintln!("host: run {run}: {} is {}", outcome.name, outcome.image),
 			Err(error) => {
 				eprintln!("host: run {run}: {app}: {error}");
@@ -222,9 +233,11 @@ pub async fn from_run(
 			eprintln!("host: run {run}: {app}'s declaration was not applied: {why}");
 			continue;
 		}
-		let applied = match redeclare(&host, id, manifest.clone()).await {
+		let applied = match redeclare(&host, id, manifest.clone(), &scope).await {
 			Ok(Redeclared::Applied(outcome)) => Ok(outcome),
-			Ok(Redeclared::NeedsImage) => imaged(&host, github, id, manifest, repository, run).await,
+			Ok(Redeclared::NeedsImage) => {
+				imaged(&host, github, id, manifest, repository, run, &scope).await
+			}
 			Err(error) => Err(error),
 		};
 		match applied {
@@ -268,6 +281,7 @@ async fn imaged(
 	manifest: Manifest,
 	repository: &str,
 	run: u64,
+	scope: &str,
 ) -> Result<super::Outcome, super::Error> {
 	let app = manifest.name.clone();
 	staged(&host.store, id, Stage::Admitting, async { runnable(host, &manifest) }).await?;
@@ -292,7 +306,7 @@ async fn imaged(
 	if let Err(error) = host.store.note(id, &why) {
 		eprintln!("host: recording event {id}: {error}");
 	}
-	archived(host, id, &app, manifest, &image, Some(run)).await
+	archived(host, id, &app, manifest, &image, Some(run), scope).await
 }
 
 /// `artifacts` but the apps `settled` of the run already, every one when the operator `overridden`
@@ -460,7 +474,7 @@ mod tests {
 		let source = Source::run(42, None).of("monoflake/platform");
 		let (running, admitting) = (Outcome::Running, Some(Stage::Admitting));
 		let id = host.store.record("geo", Action::Deploy, &source, None, running, admitting).unwrap();
-		let asked = redeclare(&host, id, manifest.clone()).await.unwrap();
+		let asked = redeclare(&host, id, manifest.clone(), "platform").await.unwrap();
 		assert!(matches!(asked, Redeclared::NeedsImage));
 		// Running another architecture is no image of the one it now asks for.
 		let deployed = crate::store::Deployed {
@@ -475,7 +489,10 @@ mod tests {
 		let host = crate::testing_with(directory.path(), |config| {
 			config.emulate = vec!["arm64".into()];
 		});
-		assert!(matches!(redeclare(&host, id, pinned).await.unwrap(), Redeclared::NeedsImage));
+		assert!(matches!(
+			redeclare(&host, id, pinned, "platform").await.unwrap(),
+			Redeclared::NeedsImage
+		));
 	}
 
 	#[test]

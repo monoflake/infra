@@ -123,7 +123,13 @@ EDGE_SUBNET = "172.30.0.0/24"
 # address in it: cloudflared may reach Caddy over IPv6, so Caddy trusts this one beside the IPv4.
 EDGE_SUBNET6 = "fd34:1053:16bd::/64"
 TUNNEL_SOURCE6 = "fd34:1053:16bd::20"
-DEPLOY_SOURCES = "monoflake/infra monoflake/platform"
+# The repositories every node deploys from, each with the scope its runs deploy into: the node's to
+# say, never a declaration's. Only `infra` deploys infra's own names. See
+# spec/architecture/host.md, "The machine pulls; nothing pushes into it".
+DEPLOY_SOURCES = "monoflake/infra=infra monoflake/platform=platform canmi21/cue=canmi"
+# The organization whose runs `GITHUB_ACTIONS_TOKEN` reads; every other source's owner has a token
+# of its own, `GITHUB_ACTIONS_TOKEN_<OWNER>`, as host and the platform's deployer read it.
+HOME_OWNER = "monoflake"
 # The repository and workflow host's own image is built by.
 REPOSITORY = "monoflake/infra"
 WORKFLOW = "deploy.yml"
@@ -133,6 +139,13 @@ HOST_PORT = 11011
 WAIT_SECONDS = 60
 # The secrets host and Caddy are given, read from the environment mise loads secrets.json into.
 SECRETS = ("ACME_EMAIL", "GITHUB_ACTIONS_TOKEN", "INTERNAL_TOKEN")
+
+
+def owner_tokens():
+	"""The variable each source owner's own Actions token is kept under, but the home organization's:
+	`GITHUB_ACTIONS_TOKEN_CANMI21` for `canmi21/cue`."""
+	owners = {entry.split("/")[0] for entry in DEPLOY_SOURCES.split()} - {HOME_OWNER}
+	return sorted(f"GITHUB_ACTIONS_TOKEN_{owner.upper().replace('-', '_')}" for owner in owners)
 # `uname -m` as an artifact name spells it.
 ARCHES = {"aarch64": "arm64", "x86_64": "amd64"}
 COMPOSE = ROOT / "apps/deploy/host/docker-compose.yml"
@@ -271,6 +284,8 @@ read -r canary
 read -r protocol
 read -r version
 read -r source6
+read -r sources
+read -r owned
 upsert() {
 	file=$1
 	shift
@@ -308,7 +323,8 @@ if [ -f "$file" ]; then
 		esac
 	done
 	echo "host $(upsert "$file" "HOST_READ_TOKEN=$token" "GRANTS=$grants" "NODE_SLOT=$slot" \
-		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary" "TUNNEL_SOURCE6=$source6")"
+		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary" "TUNNEL_SOURCE6=$source6" \
+		"DEPLOY_SOURCES=$sources" $owned)"
 else
 	echo "host absent"
 fi
@@ -752,6 +768,15 @@ def stored_secret(key, dry):
 	return token
 
 
+def owned_line():
+	"""Each source owner's token as `KEY=value`, space-separated, for the relay script's stdin and
+	never a command line. Missing from secrets.json, the task stops before a machine is asked."""
+	missing = [key for key in owner_tokens() if not os.environ.get(key)]
+	if missing:
+		sys.exit(f"node: {', '.join(missing)} not in the environment; it comes from secrets.json")
+	return " ".join(f"{key}={os.environ[key]}" for key in owner_tokens())
+
+
 def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	"""Gives the relay peer, and host, what they read on one node, and with `recreate` has keeper
 	start host again when its .env changed, so host reads it. False when the node could not be given
@@ -776,7 +801,8 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
-			f"    TUNNEL_SOURCE6={TUNNEL_SOURCE6}\n"
+			f"    TUNNEL_SOURCE6={TUNNEL_SOURCE6} DEPLOY_SOURCES='{DEPLOY_SOURCES}'\n"
+			f"    {' '.join(f'{key}=<redacted>' for key in owner_tokens())}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept\n"
 			f"{tunnel}"
 			+ ("\n  if host's .env changed, ask keeper to recreate host on it, as recreate-host does"
@@ -787,7 +813,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
 		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n{version}\n"
-		f"{TUNNEL_SOURCE6}\n"
+		f"{TUNNEL_SOURCE6}\n{DEPLOY_SOURCES}\n{owned_line()}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -847,6 +873,7 @@ def environment(name, nodes, token, read_token):
 		"TUNNEL_SOURCE6": TUNNEL_SOURCE6,
 		"ACME_EMAIL": os.environ["ACME_EMAIL"],
 		"GITHUB_ACTIONS_TOKEN": os.environ["GITHUB_ACTIONS_TOKEN"],
+		**{key: os.environ[key] for key in owner_tokens()},
 		"DEPLOY_SOURCES": DEPLOY_SOURCES,
 	}
 	return "".join(f"{key}={value}\n" for key, value in values.items())
@@ -854,7 +881,7 @@ def environment(name, nodes, token, read_token):
 
 def start_host(name, run, dry):
 	"""Brings up the first host on a fresh node and hands it a run; keeper replaces it after that."""
-	missing = [key for key in SECRETS if not os.environ.get(key)]
+	missing = [key for key in (*SECRETS, *owner_tokens()) if not os.environ.get(key)]
 	if missing:
 		sys.exit(f"node: {', '.join(missing)} not in the environment; they come from secrets.json")
 	machine = ssh_output(name, "uname -m")
@@ -895,7 +922,7 @@ def start_host(name, run, dry):
 			f"    HOST_TOKEN_{name.upper()} as HOST_TOKEN, HOST_READ_TOKEN,\n"
 			f"    GRANTS='{grants(nodes[name])}', EMULATE='{emulated(nodes[name])}',\n"
 			f"    CANARY={canary_of(name, nodes)},\n"
-			"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN\n"
+			f"    ACME_EMAIL, GITHUB_ACTIONS_TOKEN, {', '.join(owner_tokens())}\n"
 			f"  docker compose up -d in /data/apps/host, waiting {WAIT_SECONDS}s for it to run\n"
 			f"  POST {notice} to host's address on app-host, port {HOST_PORT}, /notice, with the\n"
 			"    machine's own curl, or wget where there is none; no image is pulled"

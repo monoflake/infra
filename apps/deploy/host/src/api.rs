@@ -255,6 +255,9 @@ struct Shown {
 	driver: bool,
 	/// How a new version takes its place, `replace` when its declaration says nothing.
 	rollout: Rollout,
+	/// The scope it belongs to: the one whose run first deployed it here. See
+	/// spec/architecture/host.md, "The machine pulls; nothing pushes into it".
+	scope: Option<String>,
 	/// The architecture its image runs as: the one it asks for, or the node's own.
 	arch: Option<String>,
 	/// Whether that is not the node's own, so it runs emulated.
@@ -270,7 +273,11 @@ async fn shown(host: &Host, app: Deployed) -> Shown {
 	let native = host.config.native;
 	let arch = app.manifest.arch.clone().or_else(|| native.map(str::to_owned));
 	let emulated = arch.as_deref() != native;
-	Shown { app, running, restorable, platform, driver, rollout, arch, emulated }
+	let scope = match app.manifest.name.as_str() {
+		"host" => Some(deploy::github::INFRA_SCOPE.to_owned()),
+		name => host.store.scope_of(name).ok().flatten(),
+	};
+	Shown { app, running, restorable, platform, driver, rollout, scope, arch, emulated }
 }
 
 /// Every app the store holds, and host itself among them, read from its container.
@@ -575,6 +582,8 @@ async fn upload(
 		return failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_name", error);
 	}
 	let mut declared: Option<Manifest> = None;
+	// The scope an upload deploys into, which a new app's upload names; an existing app keeps its.
+	let mut scope: Option<String> = None;
 	let archive = deploy::arrival(&host.config.incoming);
 	let mut received = false;
 	loop {
@@ -596,6 +605,10 @@ async fn upload(
 					}
 				}
 			}
+			Some("scope") => match part.text().await {
+				Ok(text) => scope = Some(text.trim().to_owned()),
+				Err(error) => return failed(StatusCode::BAD_REQUEST, "invalid_upload", error),
+			},
 			Some("image") => {
 				if let Err(error) = save(&archive, part).await {
 					return failed(StatusCode::BAD_REQUEST, "invalid_upload", error);
@@ -611,7 +624,9 @@ async fn upload(
 	if !received {
 		return failed(StatusCode::BAD_REQUEST, "invalid_upload", "No image part");
 	}
-	match rollout::from_archive(&host, &name, manifest, &archive, &Source::upload()).await {
+	let source = Source::upload();
+	let uploaded = rollout::from_archive(&host, &name, manifest, &archive, &source, scope.as_deref());
+	match uploaded.await {
 		Ok(outcome) => response::success(StatusCode::OK, outcome),
 		Err(error @ (DeployError::Invalid(_) | DeployError::Unrunnable { .. })) => {
 			failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_declaration", error)
@@ -621,6 +636,12 @@ async fn upload(
 		}
 		Err(error @ DeployError::MacTaken { .. }) => {
 			failed(StatusCode::CONFLICT, "invalid_declaration", error)
+		}
+		Err(error @ DeployError::OutOfScope { .. }) => {
+			failed(StatusCode::CONFLICT, "invalid_target", error)
+		}
+		Err(error @ DeployError::NoScope(_)) => {
+			failed(StatusCode::BAD_REQUEST, "invalid_upload", error)
 		}
 		Err(error @ DeployError::Load(_)) => {
 			failed(StatusCode::UNPROCESSABLE_ENTITY, "invalid_image", error)

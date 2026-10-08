@@ -125,15 +125,50 @@ pub struct Artifact {
 	digest: String,
 }
 
-/// The repositories a node deploys from, as `DEPLOY_SOURCES` names them: `owner/name` pairs
-/// separated by whitespace. See spec/architecture/host.md, "The machine pulls; nothing pushes into
-/// it".
-pub fn sources(value: &str) -> Vec<String> {
+/// The scope infra's own repository deploys into, the only one that may deploy infra's own names.
+pub const INFRA_SCOPE: &str = "infra";
+
+/// A repository a node deploys from, and the scope its runs deploy into: the node's to say, never
+/// a declaration's. See spec/architecture/host.md, "The machine pulls; nothing pushes into it".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+	pub repository: String,
+	pub scope: String,
+}
+
+/// The repositories a node deploys from, as `DEPLOY_SOURCES` names them: `owner/name=scope`,
+/// separated by whitespace. A bare `owner/name`, as nodes wrote before scopes, deploys into the
+/// scope named as the repository is -- `monoflake/infra` into `infra`, `monoflake/platform` into
+/// `platform`. An entry that is neither is left out.
+pub fn sources(value: &str) -> Vec<Source> {
 	value
 		.split_whitespace()
-		.filter(|source| source.split('/').count() == 2)
-		.map(str::to_owned)
+		.filter_map(|entry| {
+			let (repository, scope) = match entry.split_once('=') {
+				Some((repository, scope)) => (repository, scope),
+				None => (entry, entry.rsplit('/').next().unwrap_or_default()),
+			};
+			let scoped = !scope.is_empty()
+				&& scope.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+			(repository.split('/').count() == 2
+				&& repository.split('/').all(|part| !part.is_empty())
+				&& scoped)
+				.then(|| Source { repository: repository.to_owned(), scope: scope.to_owned() })
+		})
 		.collect()
+}
+
+/// The variable a repository owner's own Actions token is read from:
+/// `GITHUB_ACTIONS_TOKEN_<OWNER>`, upper-cased, a hyphen as an underscore -- `_CANMI21` for
+/// `canmi21`, as the platform's deployer names it.
+pub fn token_variable(owner: &str) -> String {
+	format!("GITHUB_ACTIONS_TOKEN_{}", owner.to_uppercase().replace('-', "_"))
+}
+
+/// The token `repository`'s runs are read with: its owner's own among `owned`, or `default`.
+fn token_of<'a>(repository: &str, owned: &'a [(String, String)], default: &'a str) -> &'a str {
+	let owner = repository.split('/').next().unwrap_or_default();
+	owned.iter().find(|(named, _)| named == owner).map_or(default, |(_, token)| token.as_str())
 }
 
 /// An artifact on disk: the image archive, and the declaration built beside it.
@@ -213,19 +248,29 @@ pub fn check(run: u64, record: &Run, repository: &str) -> Result<(), Error> {
 pub struct GitHub {
 	client: Client<hyper_rustls::HttpsConnector<Egress>, Empty<Bytes>>,
 	/// The repositories this node deploys from; a run of any other is refused before it is read.
-	sources: Vec<String>,
+	sources: Vec<Source>,
+	/// `GITHUB_ACTIONS_TOKEN`, for an owner with no token of its own.
 	token: String,
+	/// Each source owner's own token, where the node holds one.
+	owned: Vec<(String, String)>,
 }
 
 impl GitHub {
 	/// Roots compiled in rather than read from the system: an image built from scratch has none.
-	pub fn new(token: String, sources: Vec<String>, egress: Egress) -> Self {
+	pub fn new(token: String, sources: Vec<Source>, egress: Egress) -> Self {
 		let https = hyper_rustls::HttpsConnectorBuilder::new()
 			.with_webpki_roots()
 			.https_only()
 			.enable_http1()
 			.wrap_connector(egress);
-		Self { client: Client::builder(TokioExecutor::new()).build(https), sources, token }
+		let client = Client::builder(TokioExecutor::new()).build(https);
+		Self { client, sources, token, owned: Vec::new() }
+	}
+
+	/// The same, with each owner's own token among `owned`, by owner.
+	pub fn with_owned(mut self, owned: Vec<(String, String)>) -> Self {
+		self.owned = owned;
+		self
 	}
 
 	/// The client a node's environment configures: its token, the sources it deploys from, and the
@@ -241,26 +286,42 @@ impl GitHub {
 		let proxies = egress::proxies(&std::env::var("EGRESS_PROXIES").unwrap_or_default());
 		let proxies =
 			proxies.inspect_err(|error| eprintln!("deploy: {error}, so no run is deployed")).ok()?;
-		Some(Self::new(token, sources, Egress::new(proxies)))
+		let mut owners: Vec<&str> =
+			sources.iter().filter_map(|source| source.repository.split('/').next()).collect();
+		owners.dedup();
+		let owned = owners
+			.into_iter()
+			.filter_map(|owner| {
+				let token = std::env::var(token_variable(owner)).ok().filter(|token| !token.is_empty())?;
+				Some((owner.to_owned(), token))
+			})
+			.collect();
+		Some(Self::new(token, sources, Egress::new(proxies)).with_owned(owned))
 	}
 
 	/// The repository a notice that names none is about: the one source, when there is one. A
 	/// notice from before notices named their repository can mean nothing else.
 	pub fn only_source(&self) -> Option<&str> {
 		match self.sources.as_slice() {
-			[only] => Some(only),
+			[only] => Some(&only.repository),
 			_ => None,
 		}
 	}
 
-	/// A GET, with the token only when it is GitHub's own API being asked.
-	async fn get(&self, uri: &str, authorized: bool) -> Result<hyper::Response<Incoming>, Error> {
+	/// The scope `repository`'s runs deploy into, when it is a source.
+	pub fn scope_of(&self, repository: &str) -> Option<&str> {
+		let source = self.sources.iter().find(|source| source.repository == repository)?;
+		Some(&source.scope)
+	}
+
+	/// A GET, with `token` only when it is GitHub's own API being asked.
+	async fn get(&self, uri: &str, token: Option<&str>) -> Result<hyper::Response<Incoming>, Error> {
 		let mut request = Request::get(uri)
 			.header("user-agent", "canmi-host")
 			.header("accept", "application/vnd.github+json")
 			.header("x-github-api-version", "2022-11-28");
-		if authorized {
-			request = request.header("authorization", format!("Bearer {}", self.token));
+		if let Some(token) = token {
+			request = request.header("authorization", format!("Bearer {token}"));
 		}
 		let request = request.body(Empty::new()).map_err(|e| Error::Http(e.to_string()))?;
 		self.client.request(request).await.map_err(|e| Error::Http(egress::chain(&e)))
@@ -268,7 +329,8 @@ impl GitHub {
 
 	async fn json<T: DeserializeOwned>(&self, repository: &str, path: &str) -> Result<T, Error> {
 		let uri = format!("{}/repos/{repository}{path}", canmi::EXTERNAL_GITHUB_API);
-		let response = self.get(&uri, true).await?;
+		let token = token_of(repository, &self.owned, &self.token);
+		let response = self.get(&uri, Some(token)).await?;
 		let status = response.status().as_u16();
 		let body = response.into_body().collect().await.map_err(|e| Error::Http(e.to_string()))?;
 		if !(200..300).contains(&status) {
@@ -278,7 +340,7 @@ impl GitHub {
 	}
 
 	/// The repositories this node deploys from.
-	pub fn sources(&self) -> &[String] {
+	pub fn sources(&self) -> &[Source] {
 		&self.sources
 	}
 
@@ -301,7 +363,7 @@ impl GitHub {
 
 	/// The deploy artifacts of `repository`'s `run`, once its record says it is one to deploy.
 	pub async fn artifacts(&self, repository: &str, run: u64) -> Result<Built, Error> {
-		if !self.sources.iter().any(|source| source == repository) {
+		if !self.sources.iter().any(|source| source.repository == repository) {
 			let why = format!("{repository} is not a repository this node deploys from");
 			return Err(Error::NotDeployable { run, why });
 		}
@@ -373,7 +435,7 @@ impl GitHub {
 		// GitHub answers with a redirect to storage, which is signed and must not be sent the token.
 		let uri =
 			format!("{}/repos/{repository}/actions/artifacts/{id}/zip", canmi::EXTERNAL_GITHUB_API);
-		let redirect = self.get(&uri, true).await?;
+		let redirect = self.get(&uri, Some(token_of(repository, &self.owned, &self.token))).await?;
 		let status = redirect.status().as_u16();
 		let location = redirect
 			.headers()
@@ -381,7 +443,7 @@ impl GitHub {
 			.and_then(|value| value.to_str().ok())
 			.map(str::to_owned)
 			.ok_or(Error::Status { status, what: format!("artifact {id}") })?;
-		let mut response = self.get(&location, false).await?;
+		let mut response = self.get(&location, None).await?;
 		let status = response.status().as_u16();
 		if !(200..300).contains(&status) {
 			return Err(Error::Status { status, what: format!("artifact {id} from storage") });
@@ -518,8 +580,48 @@ mod tests {
 	}
 
 	#[test]
+	fn a_source_names_its_scope_and_a_bare_one_is_scoped_by_its_name() {
+		let source =
+			|repository: &str, scope: &str| Source { repository: repository.into(), scope: scope.into() };
+		let listed = sources("monoflake/infra=infra monoflake/platform=platform\tcanmi21/cue=canmi\n");
+		assert_eq!(
+			listed,
+			[
+				source("monoflake/infra", "infra"),
+				source("monoflake/platform", "platform"),
+				source("canmi21/cue", "canmi")
+			]
+		);
+		// Before scopes: each bare repository into the scope it is named as.
+		assert_eq!(
+			sources("monoflake/infra monoflake/platform"),
+			[source("monoflake/infra", "infra"), source("monoflake/platform", "platform")]
+		);
+		for refused in ["infra", "a/b/c", "a/b=", "a/b=Canmi", "/b=x", "a/=x"] {
+			assert!(sources(refused).iter().all(|listed| listed.repository != "a/b"), "{refused}");
+		}
+		let github = GitHub::new(String::new(), listed, Egress::new(Vec::new()));
+		assert_eq!(github.scope_of("canmi21/cue"), Some("canmi"));
+		assert_eq!(github.scope_of("canmi21/web"), None);
+	}
+
+	#[test]
+	fn a_repository_is_read_with_its_owners_token_where_the_node_holds_one() {
+		assert_eq!(token_variable("canmi21"), "GITHUB_ACTIONS_TOKEN_CANMI21");
+		assert_eq!(token_variable("some-org"), "GITHUB_ACTIONS_TOKEN_SOME_ORG");
+		let owned = [("canmi21".to_owned(), "personal".to_owned())];
+		assert_eq!(token_of("canmi21/cue", &owned, "organization"), "personal");
+		assert_eq!(token_of("monoflake/platform", &owned, "organization"), "organization");
+		assert_eq!(token_of("other/repo", &[], "organization"), "organization");
+	}
+
+	#[test]
 	fn the_sources_are_the_owner_and_name_pairs_the_node_lists() {
-		assert_eq!(sources(" canmi21/web\tmonoflake/infra \n"), ["canmi21/web", "monoflake/infra"]);
+		let named: Vec<String> = sources(" canmi21/web\tmonoflake/infra \n")
+			.into_iter()
+			.map(|source| source.repository)
+			.collect();
+		assert_eq!(named, ["canmi21/web", "monoflake/infra"]);
 		assert!(sources("infra a/b/c").is_empty());
 		let one = GitHub::new(String::new(), sources("monoflake/infra"), Egress::new(Vec::new()));
 		assert_eq!(one.only_source(), Some("monoflake/infra"));

@@ -215,7 +215,8 @@ const APPS: &str = "CREATE TABLE IF NOT EXISTS apps (
 	image TEXT NOT NULL,
 	previous TEXT,
 	deployed_at TEXT NOT NULL,
-	held INTEGER NOT NULL DEFAULT 0
+	held INTEGER NOT NULL DEFAULT 0,
+	scope TEXT
 );";
 
 const ROUTES: &str = "CREATE TABLE IF NOT EXISTS routes (
@@ -263,6 +264,26 @@ const IMAGES: &str = "CREATE TABLE IF NOT EXISTS flagged (
 );";
 
 /// The history with its `stage` column, added once to a file from before it.
+/// `apps.db` with its `scope` column, added once to a file from before scopes and filled then:
+/// infra's own names are infra's, every other app the platform's, the only two scopes that had ever
+/// deployed to a node. See spec/architecture/host.md, "The machine pulls; nothing pushes into it".
+fn scoped(connection: Connection) -> Result<Connection, Error> {
+	let query = "SELECT COUNT(*) FROM pragma_table_info('apps') WHERE name = 'scope'";
+	let columns: i64 = connection.query_row(query, [], |row| row.get(0))?;
+	if columns == 0 {
+		let own: Vec<String> = deploy::manifest::OWN.iter().map(|name| format!("'{name}'")).collect();
+		connection.execute_batch(&format!(
+			"BEGIN;
+			ALTER TABLE apps ADD COLUMN scope TEXT;
+			UPDATE apps SET scope = CASE WHEN name IN ({}) THEN '{}' ELSE 'platform' END;
+			COMMIT;",
+			own.join(", "),
+			deploy::github::INFRA_SCOPE,
+		))?;
+	}
+	Ok(connection)
+}
+
 fn staged(connection: Connection) -> Result<Connection, Error> {
 	let query = "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'stage'";
 	let columns: i64 = connection.query_row(query, [], |row| row.get(0))?;
@@ -314,7 +335,7 @@ impl Store {
 		let legacy = directory.join("host.db");
 		let split = legacy.exists() && !directory.join("apps.db").exists();
 		let store = Self {
-			apps: Mutex::new(open(&directory.join("apps.db"), APPS)?),
+			apps: Mutex::new(scoped(open(&directory.join("apps.db"), APPS)?)?),
 			routes: Mutex::new(open(&directory.join("routes.db"), ROUTES)?),
 			history: Mutex::new(staged(open(&directory.join("history.db"), HISTORY)?)?),
 			images: Mutex::new(open(&directory.join("images.db"), IMAGES)?),
@@ -454,6 +475,27 @@ impl Store {
 			"INSERT INTO apps (name, manifest, image, previous, deployed_at) VALUES (?1, ?2, ?3, ?4, ?5)
 			ON CONFLICT (name) DO UPDATE SET manifest = ?2, image = ?3, previous = ?4, deployed_at = ?5",
 			params![name, serde_json::to_string(&app.manifest)?, app.image, previous, app.deployed_at],
+		)?;
+		Ok(())
+	}
+
+	/// The scope `app` belongs to: the one whose run, or upload, first deployed it here.
+	pub fn scope_of(&self, app: &str) -> Result<Option<String>, Error> {
+		let connection = lock(&self.apps);
+		let query = "SELECT scope FROM apps WHERE name = ?1";
+		Ok(
+			connection
+				.query_row(query, [app], |row| row.get::<_, Option<String>>(0))
+				.optional()?
+				.flatten(),
+		)
+	}
+
+	/// Record `scope` as `app`'s where it has none yet; a scope, once an app's, stays.
+	pub fn claim(&self, app: &str, scope: &str) -> Result<(), Error> {
+		lock(&self.apps).execute(
+			"UPDATE apps SET scope = ?2 WHERE name = ?1 AND scope IS NULL",
+			params![app, scope],
 		)?;
 		Ok(())
 	}
@@ -879,6 +921,53 @@ mod split {
 		assert!(directory.path().join("host.db.split").exists());
 		// Opened again, it reads the split files and leaves the set-aside one alone.
 		assert_eq!(Store::open(directory.path()).unwrap().routes().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn apps_from_before_scopes_are_infras_by_name_and_the_platforms_otherwise_once() {
+		let directory = tempfile::tempdir().unwrap();
+		let old = Connection::open(directory.path().join("apps.db")).unwrap();
+		old.execute_batch(
+			"CREATE TABLE apps (name TEXT PRIMARY KEY, manifest TEXT NOT NULL, image TEXT NOT NULL,
+			previous TEXT, deployed_at TEXT NOT NULL, held INTEGER NOT NULL DEFAULT 0);
+			INSERT INTO apps (name, manifest, image, deployed_at) VALUES
+			('geo', '{}', 'sha256:a', 't'), ('caddy', '{}', 'sha256:b', 't'), ('keeper', '{}', 'sha256:c', 't');",
+		)
+		.unwrap();
+		drop(old);
+		let store = Store::open(directory.path()).unwrap();
+		let scope = |app| store.scope_of(app).unwrap();
+		assert_eq!(scope("geo").as_deref(), Some("platform"));
+		assert_eq!(scope("caddy").as_deref(), Some("infra"));
+		assert_eq!(scope("keeper").as_deref(), Some("infra"));
+		// A scope once an app's stays; a claim is for an app that has none.
+		store.claim("geo", "canmi").unwrap();
+		assert_eq!(scope("geo").as_deref(), Some("platform"));
+		drop(store);
+		// Opened again, nothing is filled twice.
+		let store = Store::open(directory.path()).unwrap();
+		assert_eq!(store.scope_of("geo").unwrap().as_deref(), Some("platform"));
+		assert_eq!(store.scope_of("nothing").unwrap(), None);
+	}
+
+	#[test]
+	fn a_new_app_is_claimed_by_the_scope_that_first_deploys_it() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let manifest =
+			Manifest::parse(include_str!("../../../../libs/deploy/fixtures/geo.toml")).unwrap();
+		let app = Deployed {
+			manifest,
+			image: "sha256:a".into(),
+			previous: None,
+			deployed_at: String::new(),
+			held: false,
+		};
+		store.put_app(&app).unwrap();
+		assert_eq!(store.scope_of("geo").unwrap(), None);
+		store.claim("geo", "canmi").unwrap();
+		store.put_app(&Deployed { image: "sha256:b".into(), ..app }).unwrap();
+		assert_eq!(store.scope_of("geo").unwrap().as_deref(), Some("canmi"));
 	}
 
 	#[test]

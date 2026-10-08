@@ -42,6 +42,10 @@ pub enum Error {
 	PortTaken { port: u16, holder: String },
 	#[error("MAC address {mac} is already `{holder}`'s on this node")]
 	MacTaken { mac: String, holder: String },
+	#[error("`{app}` is `{holder}`'s, and `{scope}` may not deploy it")]
+	OutOfScope { app: String, scope: String, holder: String },
+	#[error("`{0}` is new on this node, and an upload of it names its scope")]
+	NoScope(String),
 	#[error(transparent)]
 	Store(#[from] store::Error),
 	#[error(transparent)]

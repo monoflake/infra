@@ -8,7 +8,8 @@ use crate::grants::Role;
 use crate::sidecars;
 use deploy::Shape;
 use deploy::engine::peer_published;
-use deploy::manifest::{Invalid, Manifest};
+use deploy::github::INFRA_SCOPE;
+use deploy::manifest::{Invalid, Manifest, OWN};
 
 /// Whether host takes a deploy under this name at all: any app's, and keeper, the meter, Caddy, the
 /// tunnel and the resolver, the reserved names it deploys. host itself is keeper's to deploy.
@@ -72,9 +73,31 @@ fn clash<'a>(
 	})
 }
 
-/// Refuse what could not be run before anything is stopped.
-pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Error> {
+/// The scope that already holds `app` against a deploy of it from `scope`, when that is not
+/// `scope`: infra's for infra's own names, and otherwise the one recorded when it first deployed.
+pub(super) fn holder<'a>(app: &str, scope: &str, recorded: Option<&'a str>) -> Option<&'a str> {
+	if OWN.contains(&app) && scope != INFRA_SCOPE {
+		return Some(INFRA_SCOPE);
+	}
+	recorded.filter(|held| *held != scope)
+}
+
+/// Refuse a deploy from `scope` of an app another scope holds. See spec/architecture/host.md, "The
+/// machine pulls; nothing pushes into it".
+pub(super) fn in_scope(host: &Host, app: &str, scope: &str) -> Result<(), Error> {
+	let recorded = host.store.scope_of(app)?;
+	match holder(app, scope, recorded.as_deref()) {
+		Some(held) => {
+			Err(Error::OutOfScope { app: app.into(), scope: scope.into(), holder: held.into() })
+		}
+		None => Ok(()),
+	}
+}
+
+/// Refuse what could not be run before anything is stopped, by a deploy from `scope`.
+pub fn admit(host: &Host, requested: &str, manifest: &Manifest, scope: &str) -> Result<(), Error> {
 	deployable(requested)?;
+	in_scope(host, requested, scope)?;
 	if TAKEN.contains(&requested) {
 		manifest.check_own(requested, &host.config.node)?;
 	} else {
@@ -129,7 +152,23 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 
 #[cfg(test)]
 mod tests {
-	use super::{TAKEN, admitted, clash, deployable, mac_holder};
+	use super::{TAKEN, admitted, clash, deployable, holder, mac_holder};
+
+	#[test]
+	fn an_app_is_its_first_scopes_and_infras_own_names_are_infras() {
+		// Another scope's app, whoever asks.
+		assert_eq!(holder("geo", "canmi", Some("platform")), Some("platform"));
+		assert_eq!(holder("qq", "platform", Some("canmi")), Some("canmi"));
+		// Its own scope, or none recorded yet.
+		assert_eq!(holder("geo", "platform", Some("platform")), None);
+		assert_eq!(holder("qq", "canmi", None), None);
+		// Infra's own names from infra's repository alone, recorded or not.
+		for own in ["keeper", "caddy", "meter", "tunnel", "resolver", "host"] {
+			assert_eq!(holder(own, "canmi", None), Some("infra"), "{own}");
+			assert_eq!(holder(own, "platform", Some("infra")), Some("infra"), "{own}");
+			assert_eq!(holder(own, "infra", Some("infra")), None, "{own}");
+		}
+	}
 
 	#[test]
 	fn a_mac_another_app_on_the_node_holds_is_refused_in_either_case() {

@@ -110,9 +110,10 @@ pub(super) async fn redeclare(
 	host: &Arc<Host>,
 	id: i64,
 	manifest: Manifest,
+	scope: &str,
 ) -> Result<Redeclared, Error> {
 	let name = manifest.name.clone();
-	staged(&host.store, id, Stage::Admitting, async { admit(host, &name, &manifest) }).await?;
+	staged(&host.store, id, Stage::Admitting, async { admit(host, &name, &manifest, scope) }).await?;
 	let _one = host.deploying.lock().await;
 	let Some(current) = host.store.app(&name)?.filter(|app| app.manifest.arch == manifest.arch)
 	else {
