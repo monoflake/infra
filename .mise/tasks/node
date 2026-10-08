@@ -193,10 +193,10 @@ PRIVATE_SCOPES = "ledger"
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
 # Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs, PRIVATE_SCOPES, what it emulates and where its canary is on stdin, a line each. Values
-# travel by stdin and environment only, never argv. A file is replaced only when its content
-# differs, and what it holds besides the keys named is kept, GRANTS's other pairs too. Prints
-# `secret <state>` and `host <state>`, a state being current, changed or absent.
+# needs, PRIVATE_SCOPES, what it emulates, where its canary is and its tunnel's protocol on stdin, a
+# line each. Values travel by stdin and environment only, never argv. A file is replaced only when
+# its content differs, and what it holds besides the keys named is kept. Prints `secret`, `host`
+# and `tunnel` each with its state: current, changed or absent.
 RELAY = r"""set -eu
 umask 077
 read -r secret
@@ -207,6 +207,7 @@ read -r wanted
 read -r scopes
 read -r emulate
 read -r canary
+read -r protocol
 upsert() {
 	file=$1
 	shift
@@ -247,6 +248,20 @@ if [ -f "$file" ]; then
 		"PRIVATE_SCOPES=$scopes" "EMULATE=$emulate" "CANARY=$canary")"
 else
 	echo "host absent"
+fi
+tunnel=/data/apps/tunnel
+file=$tunnel/config.env
+if [ -n "$protocol" ]; then
+	[ -d "$tunnel" ] || btrfs subvolume create "$tunnel" >/dev/null
+	echo "tunnel $(upsert "$file" "TUNNEL_TRANSPORT_PROTOCOL=$protocol")"
+elif [ -f "$file" ] && grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$file"; then
+	grep -v '^TUNNEL_TRANSPORT_PROTOCOL=' "$file" > "$file.new" || true
+	chown root:root "$file.new"
+	chmod 600 "$file.new"
+	mv "$file.new" "$file"
+	echo "tunnel changed"
+else
+	echo "tunnel current"
 fi
 """
 
@@ -491,11 +506,23 @@ def grants_refused(name, node):
 	return None
 
 
+# The protocols cloudflared's `--protocol` takes, which a node's `tunnel_protocol` names.
+TUNNEL_PROTOCOLS = ("quic", "http2", "auto")
+
+
+def tunnel_refused(name, node):
+	"""Why `node`'s `tunnel_protocol` cannot be, or None when it is one cloudflared takes."""
+	protocol = node.get("tunnel_protocol")
+	if protocol is None or protocol in TUNNEL_PROTOCOLS:
+		return None
+	return f"{name}: tunnel_protocol is one of {', '.join(TUNNEL_PROTOCOLS)}, not {protocol!r}"
+
+
 def load_nodes():
-	"""nodes.toml, every node's `domain`, `emulate` and `grants`, and the one canary, checked before
-	anything is asked of a machine."""
+	"""nodes.toml, every node's `domain`, `emulate`, `grants` and `tunnel_protocol`, and the one
+	canary, checked before anything is asked of a machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
-	checks = (domain_refused, emulation_refused, grants_refused)
+	checks = (domain_refused, emulation_refused, grants_refused, tunnel_refused)
 	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
 	refused += canaries_refused(nodes)
 	if refused:
@@ -647,6 +674,12 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	wanted = grants(nodes[name])
 	emulate = emulated(nodes[name])
 	canary = canary_of(name, nodes)
+	protocol = nodes[name].get("tunnel_protocol", "")
+	tunnel = (
+		f"  write TUNNEL_TRANSPORT_PROTOCOL={protocol} into /data/apps/tunnel/config.env, mode 600"
+		if protocol
+		else "  take TUNNEL_TRANSPORT_PROTOCOL out of /data/apps/tunnel/config.env, so the image's applies"
+	)
 	if dry:
 		print(
 			f"node: {name}: would, on root@{where}:\n"
@@ -655,14 +688,16 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 			f"    HOST_READ_TOKEN=<redacted> RELAY_PEERS='{peers}'\n"
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
-			f"    and {wanted} added to GRANTS, the pairs already there kept"
+			f"    and {wanted} added to GRANTS, the pairs already there kept\n"
+			f"{tunnel}, if it differs"
 			+ ("\n  if host's .env changed, ask keeper to recreate host on it, as recreate-host does"
+				"\n  if the tunnel's config.env changed, redeploy the tunnel to read it"
 				if recreate else "")
 		)
 		return True
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
-		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n"
+		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -681,6 +716,16 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 		print(f"node: {name}: host's .env changed")
 	elif states.get("host") == "absent":
 		print(f"node: {name}: host has no .env yet; run again after `node host {name}`")
+	# The tunnel reads config.env when it is next started from its version, which a redeploy does.
+	if states.get("tunnel") == "changed" and recreate:
+		print(f"node: {name}: the tunnel's config.env changed; host redeploys the tunnel to read it")
+		try:
+			host_api.main("redeploy", [name, "tunnel"], nodes)
+		except SystemExit as refused:
+			print(f"node: {name}: redeploying the tunnel failed: {refused}; run `node redeploy {name} tunnel`")
+			return False
+	elif states.get("tunnel") == "changed":
+		print(f"node: {name}: the tunnel's config.env changed; `node redeploy {name} tunnel` reads it")
 	return True
 
 

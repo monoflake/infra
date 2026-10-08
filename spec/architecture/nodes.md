@@ -164,6 +164,11 @@ from outside its organization only once `WORKER_RESOURCES` on the deployer's nod
 `sha`'s console binding was refused on 2026-10-08, and the console counted eight nodes heard of
 seven, until its id was added there for `canmi21/web`.
 
+**A node may set its tunnel's protocol**, `tunnel_protocol` in `nodes.toml`, one of `quic`,
+`http2` or `auto`: `mise run node` writes it as `TUNNEL_TRANSPORT_PROTOCOL` into the tunnel's
+`config.env`, which overrides the image's QUIC, removes it when unset, and redeploys the tunnel when
+it changed. It is for a node whose line drops QUIC, `sha` first.
+
 **The tunnel comes first.** host deploys the tunnel in the run it is handed, and a first deploy
 that fails leaves nothing behind -- the app's directory goes with it, a token placed there
 included -- so the token has to be on the node before host starts.
