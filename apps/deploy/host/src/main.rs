@@ -169,6 +169,8 @@ async fn main() -> anyhow::Result<()> {
 	rollout::tell_telemetry(&host).await;
 
 	tokio::spawn(images::run(host.clone()));
+	// Runs whose notice never arrived, at start and every 15 minutes. See rollout/catch_up.rs.
+	tokio::spawn(rollout::catch_up(host.clone()));
 
 	let telling = host.clone();
 	tokio::spawn(async move {

@@ -4,6 +4,7 @@
 
 mod admit;
 mod beside;
+mod catch_up;
 mod panel;
 mod remove;
 mod route;
@@ -13,6 +14,7 @@ mod tell;
 mod version;
 
 pub use admit::deployable;
+pub use catch_up::every as catch_up;
 pub use panel::{PLATFORM, act, itself, redeploy, restorable, rollback};
 pub use remove::remove;
 pub use route::{attach, render, route};

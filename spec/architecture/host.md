@@ -147,6 +147,15 @@ So the direction is reversed, and trust is moved off the channel.
   declaration past 64 KiB, or not a zip -- fails the notice rather than falling back to downloading
   every image. Each image still carries its own `service.toml`, which keeper reads. The
   notice is a hint, not an authority: a forged one can at worst redeploy what `main` already built.
+- **A run whose notice never came is taken anyway.** At start and every 15 minutes host lists each
+  source's successful `deploy.yml` runs on `main` from the 7 days CI keeps artifacts, and a run it
+  has no row of, newer than the oldest run of that repository it holds, was missed -- a host that
+  holds none, freshly set up, misses none. Missed runs are taken oldest first through the path a
+  notice takes, each app only from the newest run that built it, so an older build never replaces
+  a newer one; an older run's copy is recorded as passed over, naming the run that is deployed. A
+  missed run that built host goes to keeper on host's network. A run some of whose apps failed
+  counts as taken: this recovers notices, not deploys. rdu lost platform's run 37710256103 on
+  2026-10-08 while keeper was recreating its host, which is why.
 - **A node's sources are its own to name**, in `DEPLOY_SOURCES` in the node's `.env`, as
   `owner/name` pairs: a run is numbered within its repository, so a notice names the repository
   with the run, and one that names a repository the node does not list is refused before GitHub is

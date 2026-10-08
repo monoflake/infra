@@ -16,6 +16,7 @@ use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// The workflow that builds images; a run of any other builds nothing to deploy.
 pub const WORKFLOW: &str = ".github/workflows/deploy.yml";
@@ -55,6 +56,9 @@ fn io(what: impl Into<String>) -> impl FnOnce(std::io::Error) -> Error {
 
 #[derive(Debug, Deserialize)]
 pub struct Run {
+	/// Its id, which numbers it among every repository's; absent from a run read by its id.
+	#[serde(default)]
+	pub id: u64,
 	pub repository: Repository,
 	pub path: String,
 	pub head_branch: Option<String>,
@@ -167,6 +171,15 @@ pub fn app_of(artifact: &str) -> Option<(String, &'static str)> {
 }
 
 /// Whether `record` is a finished, successful run of `repository`'s deploy workflow on `main`.
+/// The ids of `runs` that are `repository`'s to deploy, the oldest first.
+fn deployable(runs: Vec<Run>, repository: &str) -> Vec<u64> {
+	let mut ids: Vec<u64> =
+		runs.iter().filter(|run| check(run.id, run, repository).is_ok()).map(|run| run.id).collect();
+	ids.sort_unstable();
+	ids.dedup();
+	ids
+}
+
 pub fn check(run: u64, record: &Run, repository: &str) -> Result<(), Error> {
 	let refuse = |why: String| Err(Error::NotDeployable { run, why });
 	if record.repository.full_name != repository {
@@ -252,6 +265,31 @@ impl GitHub {
 			return Err(Error::Status { status, what: path.to_owned() });
 		}
 		serde_json::from_slice(&body.to_bytes()).map_err(|e| Error::Http(e.to_string()))
+	}
+
+	/// The repositories this node deploys from.
+	pub fn sources(&self) -> &[String] {
+		&self.sources
+	}
+
+	/// `repository`'s runs of the deploy workflow that are ones to deploy and were made within
+	/// `within`, by their ids, the oldest first: what a node may have missed while its notices did
+	/// not reach it. See spec/todo.md.
+	pub async fn recent(&self, repository: &str, within: Duration) -> Result<Vec<u64>, Error> {
+		let since = jiff::Timestamp::now()
+			.checked_sub(jiff::SignedDuration::try_from(within).unwrap_or_default())
+			.unwrap_or_default()
+			.strftime("%Y-%m-%dT%H:%M:%SZ");
+		let workflow = WORKFLOW.rsplit('/').next().unwrap_or(WORKFLOW);
+		let path = format!(
+			"/actions/workflows/{workflow}/runs?branch=main&status=success&created=>={since}&per_page=100"
+		);
+		#[derive(Deserialize)]
+		struct Runs {
+			workflow_runs: Vec<Run>,
+		}
+		let listed: Runs = self.json(repository, &path).await?;
+		Ok(deployable(listed.workflow_runs, repository))
 	}
 
 	/// The deploy artifacts of `repository`'s `run`, once its record says it is one to deploy.
@@ -419,6 +457,7 @@ mod tests {
 
 	fn run() -> Run {
 		Run {
+			id: 1,
 			repository: Repository { full_name: "owner/infra".into() },
 			path: WORKFLOW.into(),
 			head_branch: Some("main".into()),
@@ -427,6 +466,18 @@ mod tests {
 			conclusion: Some("success".into()),
 			head_sha: None,
 		}
+	}
+
+	#[test]
+	fn of_the_recent_runs_only_those_to_deploy_are_kept_the_oldest_first() {
+		let runs = vec![
+			Run { id: 30, ..run() },
+			Run { id: 10, ..run() },
+			Run { id: 20, head_branch: Some("feature".into()), ..run() },
+			Run { id: 40, repository: Repository { full_name: "else/infra".into() }, ..run() },
+			Run { id: 10, ..run() },
+		];
+		assert_eq!(deployable(runs, "owner/infra"), [10, 30]);
 	}
 
 	#[test]

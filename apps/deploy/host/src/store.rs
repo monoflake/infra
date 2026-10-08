@@ -139,6 +139,15 @@ impl Source {
 	}
 }
 
+/// One app's deploy row from a CI run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Taken {
+	pub run: u64,
+	pub repository: Option<String>,
+	pub app: String,
+	pub outcome: Outcome,
+}
+
 /// One row of an app's history.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Event {
@@ -594,6 +603,41 @@ impl Store {
 				})
 			})
 			.collect()
+	}
+
+	/// Every app's deploy row from a CI run, with the run, its repository when the row names one, and
+	/// how it ended: what a node has taken of each run. See rollout/catch_up.rs.
+	pub fn taken(&self) -> Result<Vec<Taken>, Error> {
+		let connection = lock(&self.history);
+		let mut statement = connection.prepare(
+			"SELECT json_extract(source, '$.run'), json_extract(source, '$.repository'), app, outcome
+			FROM events WHERE action = 'deploy' AND json_extract(source, '$.kind') = 'run'
+			AND json_extract(source, '$.run') IS NOT NULL",
+		)?;
+		let rows = statement.query_map([], |row| {
+			Ok((row.get::<_, i64>(0)?, row.get(1)?, row.get(2)?, row.get::<_, String>(3)?))
+		})?;
+		rows
+			.map(|row| {
+				let (run, repository, app, outcome) = row?;
+				let run = u64::try_from(run).unwrap_or_default();
+				Ok(Taken { run, repository, app, outcome: parsed(&outcome)? })
+			})
+			.collect()
+	}
+
+	/// The apps whose deploy from `run` is settled -- deployed, or passed over -- and so is not done
+	/// again when the run is taken again. A failed one is, as a notice taken again retries it.
+	pub fn settled(&self, run: u64) -> Result<std::collections::HashSet<String>, Error> {
+		let settled = [Outcome::Succeeded, Outcome::Skipped];
+		Ok(
+			self
+				.taken()?
+				.into_iter()
+				.filter(|taken| taken.run == run && settled.contains(&taken.outcome))
+				.map(|taken| taken.app)
+				.collect(),
+		)
 	}
 
 	/// The snapshot taken before `image` was deployed: what the directory held before the version

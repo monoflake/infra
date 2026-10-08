@@ -43,6 +43,11 @@ pub async fn from_run(
 		eprintln!("host: run {run}: it built nothing for `{app}`");
 		return true;
 	}
+	// What this node settled of the run already -- deployed, or passed over by an earlier notice or a
+	// catch-up -- is not done again. See catch_up.rs.
+	let settled = host.store.settled(run).unwrap_or_default();
+	let artifacts: Vec<_> =
+		artifacts.into_iter().filter(|artifact| !settled.contains(&artifact.app)).collect();
 	if !host_replaced && artifacts.iter().any(|artifact| artifact.app == "host") {
 		eprintln!("host: run {run}: it built host, so keeper goes first and passes it back");
 		// Not taken, so the notice keeper sends afterwards is.
@@ -50,7 +55,7 @@ pub async fn from_run(
 	}
 	// A new host, keeper or Caddy reaches the canary first; deployed by hand, it goes now.
 	let mut waiting = HashMap::new();
-	let built_apps = || built.artifacts.iter().map(|artifact| artifact.app.as_str());
+	let built_apps = || artifacts.iter().map(|artifact| artifact.app.as_str());
 	if let Canary::At(canary) = host.config.canary
 		&& !by_hand
 		&& deploy::canary::gated(built_apps())
