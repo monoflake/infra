@@ -15,6 +15,14 @@ is [roadmap.md](roadmap.md); how the three divide the work is the workspace's `s
 - **`app_of` stops reading a bare `deploy-<app>` as arm64** once no run that still names its
   artifacts that way is fresh enough to deploy -- [architecture/host.md](architecture/host.md),
   "The machine pulls; nothing pushes into it".
+- **host catches up on runs it missed**, decided on 2026-10-08 after rdu lost platform's run
+  37710256103 while keeper was recreating its host. At start and every 15 minutes, host lists each
+  source's successful `deploy.yml` runs on `main` for the 7 days their artifacts are kept; a run
+  with no event in its history, and newer than the oldest run it holds for that repository, was
+  missed. Missed runs are taken oldest first through the same path a notice takes, each deploying
+  only the apps no newer run built, so an older build never replaces a newer one; a missed run that
+  built host is handed to keeper on host's network. A node away longer than 7 days still needs a
+  run by hand.
 - **A health-check stage of its own**, which needs `libs/deploy`'s `replace_beside` to report its
   progress: today `starting` covers the start and the check together --
   [architecture/host.md](architecture/host.md), "Every event is kept, and none is pruned".
