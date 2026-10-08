@@ -15,7 +15,7 @@ pub use report::{
 };
 pub use shape::{
 	APK_DOOR, DBUS_SOCKET, EDGE_MOUNTS, EDGE_NETWORK, EDGE_PORTS, OBSERVED, RESOLVER_MOUNT,
-	RESOLVER_PORTS, Shape, socket_mount,
+	RESOLVER_PORTS, Shape, peer_published, socket_mount,
 };
 pub(crate) use shape::{SCRATCH, bind, sandbox};
 

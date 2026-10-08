@@ -191,7 +191,10 @@ published on the machine at the same number on every address, which the firewall
 tailnet alone (see [nodes.md](nodes.md), "Nothing comes in but over the tailnet"), and joined to
 host's own network to read its node's host with the read token; a peer that names a `port` of its
 own in `[shape]` has that one published instead, and its declared port stays on the node for host
-to check, which is how the platform's Postgres publishes 5432 and keeps its keeper's HTTP to itself; the driver of a kind, whose image
+to check, which is how the platform's Postgres publishes 5432 and keeps its keeper's HTTP to itself;
+`ports = [...]` names several in place of `port`, one program serving the tailnet on more than one,
+as Postgres beside Patroni's REST and etcd's client and peer ports, and host refuses a peer whose
+port another peer on the node already publishes before it stops anything; the driver of a kind, whose image
 every sidecar of that kind runs; and a claim on hostnames, which Caddy routes and the resolver
 answers. An app asks in its `service.toml` --
 `[shape] kind = "scheduler"`, `[driver] provides = "objects"` -- and the node's `.env` grants, in

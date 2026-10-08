@@ -556,3 +556,32 @@ fn an_app_asks_for_arm64_or_for_nothing() {
 		assert_eq!(asked(refused).check("geo", "rdu"), Err(Invalid::Arch(refused.into())), "{refused}");
 	}
 }
+
+#[test]
+fn a_peer_publishes_several_ports_in_place_of_one() {
+	let shaped = |shape: &str| Manifest::parse(&format!("{GEO}\n[shape]\n{shape}\n")).unwrap();
+	let several = shaped("kind = \"peer\"\nports = [5432, 8008]");
+	assert_eq!(several.check("geo", "rdu"), Ok(()));
+	let shape = several.shape.as_ref().unwrap();
+	assert_eq!(shape.published(), Some(vec![5432, 8008]));
+	let back = Manifest::parse(&toml::to_string(&several).unwrap()).unwrap();
+	assert_eq!(back.shape, several.shape);
+	// `port` alone reads as it did, and neither is written when absent.
+	assert_eq!(shaped("kind = \"peer\"\nport = 5432").shape.unwrap().published(), Some(vec![5432]));
+	let relay = shaped("kind = \"peer\"");
+	assert_eq!(relay.shape.as_ref().unwrap().published(), None);
+	let written: toml::Table = toml::to_string(&relay).unwrap().parse().unwrap();
+	assert!(!written["shape"].as_table().unwrap().contains_key("ports"));
+	// The declared port may be among them, published only because it is listed.
+	let declared = several.container.as_ref().unwrap().port.unwrap();
+	let listed = shaped(&format!("kind = \"peer\"\nports = [{declared}, 2380]"));
+	assert_eq!(listed.check("geo", "rdu"), Ok(()));
+	for refused in
+		["ports = []", "ports = [0]", "ports = [2379, 2379]", "port = 5432\nports = [8008]"]
+	{
+		let manifest = shaped(&format!("kind = \"peer\"\n{refused}"));
+		assert_eq!(manifest.check("geo", "rdu"), Err(Invalid::PeerPorts), "{refused}");
+	}
+	let cron = shaped("kind = \"scheduler\"\nports = [2379]");
+	assert_eq!(cron.check("geo", "rdu"), Err(Invalid::ShapePort("scheduler".into())));
+}

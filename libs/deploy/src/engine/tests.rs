@@ -196,13 +196,15 @@ fn the_reporter_shape_mounts_the_meters_directory_read_only() {
 }
 
 #[test]
-fn the_peer_shape_publishes_its_port_on_every_address_at_the_same_number() {
-	let published = peer_ports(20800);
-	assert_eq!(published.len(), 1);
-	let bindings = published["20800/tcp"].as_deref().unwrap();
-	let addresses: Vec<_> = bindings.iter().map(|binding| binding.host_ip.as_deref()).collect();
-	assert_eq!(addresses, [Some("0.0.0.0"), Some("::")]);
-	assert!(bindings.iter().all(|binding| binding.host_port.as_deref() == Some("20800")));
+fn the_peer_shape_publishes_each_port_on_every_address_at_the_same_number() {
+	let published = peer_ports(&[2379, 2380]);
+	assert_eq!(published.len(), 2);
+	for port in ["2379", "2380"] {
+		let bindings = published[&format!("{port}/tcp")].as_deref().unwrap();
+		let addresses: Vec<_> = bindings.iter().map(|binding| binding.host_ip.as_deref()).collect();
+		assert_eq!(addresses, [Some("0.0.0.0"), Some("::")]);
+		assert!(bindings.iter().all(|binding| binding.host_port.as_deref() == Some(port)));
+	}
 	assert!(Shape::Peer { env: vec![] }.networked());
 }
 
@@ -216,11 +218,15 @@ fn a_peer_publishes_its_shapes_port_in_place_of_its_declared_one() {
 	let relay = shaped("");
 	let declared = relay.container.as_ref().and_then(|container| container.port);
 	assert!(declared.is_some());
-	assert_eq!(peer_port(&relay), declared);
+	assert_eq!(peer_published(&relay), Vec::from_iter(declared));
 	let database = shaped("port = 5432");
-	assert_eq!(peer_port(&database), Some(5432));
-	let published = peer_ports(peer_port(&database).unwrap());
+	assert_eq!(peer_published(&database), [5432]);
+	let published = peer_ports(&peer_published(&database));
 	assert_eq!(published.keys().collect::<Vec<_>>(), ["5432/tcp"]);
+	// Several, in place of the declared port, which is published only when it is listed.
+	assert_eq!(peer_published(&shaped("ports = [5432, 8008]")), [5432, 8008]);
+	let listed = shaped(&format!("ports = [{}, 2380]", declared.unwrap()));
+	assert_eq!(peer_published(&listed), [declared.unwrap(), 2380]);
 }
 
 #[test]

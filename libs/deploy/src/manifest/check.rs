@@ -73,6 +73,11 @@ pub enum Invalid {
 	ShapePort(String),
 	#[error("a peer's `[shape]` port {0} is 0 or its container's own, which it publishes anyway")]
 	PeerPort(u16),
+	#[error(
+		"a peer's `[shape]` ports are one or more, none 0, each once, and in place of `port`, not \
+		 beside it"
+	)]
+	PeerPorts,
 	#[error("`[driver]` provides `{0}`, and a driver is one of objects and postgres")]
 	Driver(String),
 	#[error(
@@ -231,13 +236,23 @@ impl Manifest {
 			return Err(Invalid::Shape(shape.kind.clone()));
 		}
 		if let Some(shape) = &self.shape
-			&& let Some(port) = shape.port
+			&& (shape.port.is_some() || shape.ports.is_some())
+			&& shape.kind != "peer"
 		{
-			if shape.kind != "peer" {
-				return Err(Invalid::ShapePort(shape.kind.clone()));
+			return Err(Invalid::ShapePort(shape.kind.clone()));
+		}
+		if let Some(port) = self.shape.as_ref().and_then(|shape| shape.port) {
+			if self.shape.as_ref().is_some_and(|shape| shape.ports.is_some()) {
+				return Err(Invalid::PeerPorts);
 			}
 			if port == 0 || container.port == Some(port) {
 				return Err(Invalid::PeerPort(port));
+			}
+		}
+		if let Some(ports) = self.shape.as_ref().and_then(|shape| shape.ports.as_ref()) {
+			let distinct: std::collections::HashSet<&u16> = ports.iter().collect();
+			if ports.is_empty() || ports.contains(&0) || distinct.len() != ports.len() {
+				return Err(Invalid::PeerPorts);
 			}
 		}
 		let provides = self.driver.as_ref().map(|driver| driver.provides.as_str());

@@ -4,8 +4,10 @@
 use super::Error;
 use super::shape::{placed, shape_named};
 use crate::Host;
+use crate::grants::Role;
 use crate::sidecars;
 use deploy::Shape;
+use deploy::engine::peer_published;
 use deploy::manifest::{Invalid, Manifest};
 
 /// Whether host takes a deploy under this name at all: any app's, and keeper, the meter, Caddy, the
@@ -50,6 +52,16 @@ pub(super) fn runnable(host: &Host, manifest: &Manifest) -> Result<(), Error> {
 	Err(Error::Unrunnable { app: manifest.name.clone(), arch: arch.to_owned(), native })
 }
 
+/// The first of `mine` that one of `others` publishes already, and which.
+fn clash<'a>(
+	mine: &[u16],
+	mut others: impl Iterator<Item = (&'a str, Vec<u16>)>,
+) -> Option<(u16, &'a str)> {
+	others.find_map(|(name, theirs)| {
+		mine.iter().find(|port| theirs.contains(port)).map(|port| (*port, name))
+	})
+}
+
 /// Refuse what could not be run before anything is stopped.
 pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Error> {
 	deployable(requested)?;
@@ -62,8 +74,19 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 		return Err(deploy::manifest::Invalid::NoContainer(manifest.name.clone()).into());
 	};
 	// Refused before anything is stopped, as everything here is.
-	host.config.grants.shape_of(manifest)?;
+	let role = host.config.grants.shape_of(manifest)?;
 	runnable(host, manifest)?;
+	// Docker refuses a port another container publishes only once the old version is stopped.
+	if role == Some(Role::Peer) {
+		let apps = host.store.apps()?;
+		let others = apps.iter().filter(|app| app.manifest.name != manifest.name).filter(|app| {
+			host.config.grants.shape_of(&app.manifest).is_ok_and(|role| role == Some(Role::Peer))
+		});
+		let published = others.map(|app| (app.manifest.name.as_str(), peer_published(&app.manifest)));
+		if let Some((port, holder)) = clash(&peer_published(manifest), published) {
+			return Err(Error::PortTaken { port, holder: holder.to_owned() });
+		}
+	}
 	for driver in manifest.drivers() {
 		if sidecars::driver(host, driver)?.is_none() {
 			return Err(Error::NoDriver(manifest.name.clone(), driver.name()));
@@ -83,7 +106,15 @@ pub fn admit(host: &Host, requested: &str, manifest: &Manifest) -> Result<(), Er
 
 #[cfg(test)]
 mod tests {
-	use super::{TAKEN, admitted, deployable};
+	use super::{TAKEN, admitted, clash, deployable};
+
+	#[test]
+	fn a_peer_may_not_publish_a_port_another_peer_publishes() {
+		let others = || [("database", vec![5432, 8008]), ("relay", vec![12012])].into_iter();
+		assert_eq!(clash(&[2379, 2380], others()), None);
+		assert_eq!(clash(&[2379, 8008], others()), Some((8008, "database")));
+		assert_eq!(clash(&[12012], others()), Some((12012, "relay")));
+	}
 	use crate::rollout::shape::{Placed, shape_named};
 	use deploy::manifest::{Invalid, OWN};
 

@@ -84,24 +84,28 @@ pub const RESOLVER_PORTS: [(&str, &str); 2] = [("1053/udp", "53"), ("1053/tcp", 
 /// Where the resolver shape mounts host's rendered configuration, read-only.
 pub const RESOLVER_MOUNT: (&str, &str) = ("host", "/etc/coredns");
 
-/// What the peer shape publishes `port` as: the same number on every address of the machine,
-/// rather than the tailnet's, which is not there yet when Docker starts containers at boot. The
-/// firewall drops what does not come over the tailnet; see spec/architecture/nodes.md, "Nothing
-/// comes in but over the tailnet".
-pub(super) fn peer_ports(port: u16) -> HashMap<String, Option<Vec<PortBinding>>> {
-	let on = |address: &str| PortBinding {
+/// What the peer shape publishes each of `ports` as: the same number on every address of the
+/// machine, rather than the tailnet's, which is not there yet when Docker starts containers at
+/// boot. The firewall drops what does not come over the tailnet; see spec/architecture/nodes.md,
+/// "Nothing comes in but over the tailnet".
+pub(super) fn peer_ports(ports: &[u16]) -> HashMap<String, Option<Vec<PortBinding>>> {
+	let on = |address: &str, port: u16| PortBinding {
 		host_ip: Some(address.into()),
 		host_port: Some(port.to_string()),
 	};
-	HashMap::from([(format!("{port}/tcp"), Some(vec![on("0.0.0.0"), on("::")]))])
+	ports
+		.iter()
+		.map(|port| (format!("{port}/tcp"), Some(vec![on("0.0.0.0", *port), on("::", *port)])))
+		.collect()
 }
 
-/// The port the peer shape publishes: its `[shape]` port when it names one, its declared port
-/// otherwise. See spec/architecture/host.md, "A role is asked for by the app and granted by the
-/// node".
-pub(super) fn peer_port(manifest: &Manifest) -> Option<u16> {
-	let named = manifest.shape.as_ref().and_then(|shape| shape.port);
-	named.or_else(|| manifest.container.as_ref().and_then(|container| container.port))
+/// The ports the peer shape publishes: what its `[shape]` names -- `ports`, or `port` -- and its
+/// declared port when it names none. See spec/architecture/host.md, "A role is asked for by the
+/// app and granted by the node".
+pub fn peer_published(manifest: &Manifest) -> Vec<u16> {
+	let named = manifest.shape.as_ref().and_then(|shape| shape.published());
+	let declared = || manifest.container.as_ref().and_then(|container| container.port);
+	named.unwrap_or_else(|| declared().into_iter().collect())
 }
 
 /// Where the observer shape puts the machine's two kernel filesystems.
@@ -243,7 +247,7 @@ impl Engine {
 		// A ceiling on every container, and no swap past it: a limit that can be exceeded into swap
 		// is a slower machine rather than a limit. See spec/architecture/host.md.
 		let declared = manifest.container.as_ref().and_then(|container| container.memory_mb);
-		let published_port = peer_port(manifest);
+		let published = peer_published(manifest);
 		let memory = i64::from(declared.unwrap_or(DEFAULT_MEMORY_MB)) * 1024 * 1024;
 		let logs = HostConfigLogConfig { typ: Some("json-file".into()), config: None };
 		let restart =
@@ -301,7 +305,7 @@ impl Engine {
 			Shape::Reporter { env, meter } => (sandboxed(reporter_mounts(own, meter)), env.clone()),
 			Shape::Peer { env } => {
 				let config = HostConfig {
-					port_bindings: published_port.map(peer_ports),
+					port_bindings: (!published.is_empty()).then(|| peer_ports(&published)),
 					..sandboxed(own.into_iter().collect())
 				};
 				(config, env.clone())
@@ -359,7 +363,7 @@ impl Engine {
 				Shape::Resolver { .. } => {
 					Some(RESOLVER_PORTS.iter().map(|(inside, _)| (*inside).to_owned()).collect())
 				}
-				Shape::Peer { .. } => published_port.map(|port| vec![format!("{port}/tcp")]),
+				Shape::Peer { .. } => Some(published.iter().map(|port| format!("{port}/tcp")).collect()),
 				_ => None,
 			},
 			host_config: Some(host_config),

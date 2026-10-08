@@ -140,6 +140,17 @@ pub struct ShapeRequest {
 	/// and granted by the node".
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub port: Option<u16>,
+	/// The ports a peer publishes, in place of `port` and of its declared one, which stays on the
+	/// node unless it is among them: one program serving the tailnet on several. A peer only.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ports: Option<Vec<u16>>,
+}
+
+impl ShapeRequest {
+	/// What it names to publish: `ports`, or `port` alone; none when it names neither.
+	pub fn published(&self) -> Option<Vec<u16>> {
+		self.ports.clone().or_else(|| self.port.map(|port| vec![port]))
+	}
 }
 
 /// A driver offered: the `[objects]` or `[postgres]` an app declares, which this image serves.
