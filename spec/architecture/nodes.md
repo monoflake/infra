@@ -164,6 +164,22 @@ from outside its organization only once `WORKER_RESOURCES` on the deployer's nod
 `sha`'s console binding was refused on 2026-10-08, and the console counted eight nodes heard of
 seven, until its id was added there for `canmi21/web`.
 
+**`edge` is dual-stack**, `172.30.0.0/24` and `fd34:1053:16bd::/64`, the same unrouted ULA on every
+node, so a tunnel may reach Cloudflare over IPv6 as well; Docker translates its outbound traffic as
+it does IPv4's. Nothing published becomes reachable from the public IPv6 side: the node's forward
+chain drops a translated connection that did not come in on a trusted interface, for both families,
+proven before it was adopted. `mise run node` makes it so, and moves a node's IPv4-only `edge` over
+by saving its members, recreating it and reconnecting them, the tunnel at its fixed address,
+then restarting the tunnel -- a few seconds of the public door -- and picks up a run cut short. The
+tunnel still reaches Caddy over IPv4, so Caddy's trust in it is unchanged. Creating the first IPv6
+network turns IPv6 forwarding on; no node lost its IPv6 route to that, since none relies on the
+kernel accepting router advertisements with `accept_ra = 1`.
+
+**A node may set which family its tunnel uses**, `tunnel_ip_version`, `auto`, `4` or `6`, written
+as `TUNNEL_EDGE_IP_VERSION` beside the protocol. `auto`, the default, resolves to IPv4 on `edge`,
+since an address from a ULA sorts after IPv4, and falls back from IPv6 to IPv4 only; `6` is IPv6
+alone.
+
 **A node may set its tunnel's protocol**, `tunnel_protocol` in `nodes.toml`, one of `quic`,
 `http2` or `auto`: `mise run node` writes it as `TUNNEL_TRANSPORT_PROTOCOL` into the tunnel's
 `config.env`, which overrides the image's QUIC, removes it when unset, and redeploys the tunnel when

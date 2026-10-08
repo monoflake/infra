@@ -5,9 +5,8 @@
 # for the node in the house. `ipv4 = false`: no IPv4, so GitHub is reached through the others'
 # egress proxies. `core` marks the three that hold the control plane, `canary = true` the one a new
 # host, keeper or Caddy reaches first. `emulate = ["arm64"]` runs arm64 images on x86 Debian.
-# `grants` adds `app:role` pairs after the family's and the core's; `tunnel_protocol`, quic, http2
-# or auto, replaces the tunnel image's QUIC. A node is appended, never inserted: its position is its
-# slot in a weekly spread, platform's spec/architecture/cron.md.
+# `grants` adds `app:role` pairs; `tunnel_protocol` (quic, http2, auto) and `tunnel_ip_version`
+# (auto, 4, 6) set the tunnel's. Appended, never inserted: a node's position is its weekly slot.
 
 [tyo]
 core = true

@@ -119,6 +119,9 @@ PRIVATE_SOURCES = "100.64.0.0/10,127.0.0.0/8,172.16.0.0/12"
 # The tunnel's fixed address on `edge`, inside EDGE_SUBNET.
 TUNNEL_SOURCE = "172.30.0.20"
 EDGE_SUBNET = "172.30.0.0/24"
+# `edge`'s IPv6, the same unique local /64 on every node and never routed: the tunnel reaches
+# Cloudflare over IPv6 through Docker's NAT, and still reaches Caddy over IPv4.
+EDGE_SUBNET6 = "fd34:1053:16bd::/64"
 DEPLOY_SOURCES = "monoflake/infra monoflake/platform"
 # The repository and workflow host's own image is built by.
 REPOSITORY = "monoflake/infra"
@@ -133,24 +136,79 @@ SECRETS = ("ACME_EMAIL", "GITHUB_ACTIONS_TOKEN", "INTERNAL_TOKEN")
 ARCHES = {"aarch64": "arm64", "x86_64": "amd64"}
 COMPOSE = ROOT / "apps/deploy/host/docker-compose.yml"
 
-# Runs on the node before host starts: `edge` at the subnet the tunnel's address is in, and the
-# subvolumes host and Caddy live in, since host snapshots each app's.
-PREPARE = rf"""set -eu
-mountpoint -q /data || {{ echo "/data is not mounted" >&2; exit 1; }}
-subnet=$(docker network inspect edge \
-	--format '{{{{range .IPAM.Config}}}}{{{{.Subnet}}}}{{{{end}}}}' 2>/dev/null || true)
-if [ -z "$subnet" ]; then
-	docker network create --subnet {EDGE_SUBNET} edge >/dev/null
-	echo "edge: created at {EDGE_SUBNET}"
-elif [ "$subnet" != {EDGE_SUBNET} ]; then
-	echo "edge is at $subnet, not {EDGE_SUBNET}; remove it or move it by hand" >&2
-	exit 1
-fi
+# Runs on the node before host starts: the subvolumes host and Caddy live in, since host snapshots
+# each app's. `edge` is EDGE's, run after it.
+PREPARE = r"""set -eu
+mountpoint -q /data || { echo "/data is not mounted" >&2; exit 1; }
 mkdir -p /data/apps
 for app in host caddy; do
 	[ -d /data/apps/$app ] || btrfs subvolume create /data/apps/$app >/dev/null
 done
 chmod 700 /data/apps/caddy
+"""
+
+# Runs on the node: `edge` at both subnets, the tunnel's IPv4 address in the first. One at
+# EDGE_SUBNET alone, as every node's was first, cannot be changed in place, so it is made again:
+# who stands on it is written down, taken off and put back, the tunnel at its address, and the
+# tunnel is restarted so it dials Cloudflare at once rather than waiting out connections that left
+# with the old bridge. A run cut short puts them back the next time. Prints `edge: ...` lines.
+EDGE = rf"""set -eu
+command -v docker >/dev/null || {{ echo "edge: no docker yet"; exit 0; }}
+mountpoint -q /data || {{ echo "edge: /data is not mounted; left as it is"; exit 0; }}
+saved=/data/apps/.edge-members
+dual="{EDGE_SUBNET} {EDGE_SUBNET6} true"
+config=$(docker network inspect edge \
+	--format '{{{{range .IPAM.Config}}}}{{{{.Subnet}}}} {{{{end}}}}{{{{.EnableIPv6}}}}' 2>/dev/null || true)
+case "$config" in
+"$dual")
+	[ -f "$saved" ] || {{ echo "edge: current"; exit 0; }}
+	;;
+"{EDGE_SUBNET} false")
+	mkdir -p /data/apps
+	docker network inspect edge \
+		--format '{{{{range .Containers}}}}{{{{.Name}}}} {{{{.IPv4Address}}}}{{{{"\n"}}}}{{{{end}}}}' > "$saved.new"
+	mv "$saved.new" "$saved"
+	while read -r member _; do
+		[ -z "$member" ] || docker network disconnect edge "$member"
+	done < "$saved"
+	docker network rm edge >/dev/null
+	;;
+"") ;;
+*)
+	echo "edge is at $config, not $dual; remove it or move it by hand" >&2
+	exit 1
+	;;
+esac
+if [ "$config" != "$dual" ]; then
+	docker network create --ipv6 --subnet {EDGE_SUBNET} --subnet {EDGE_SUBNET6} edge >/dev/null
+	echo "edge: created at {EDGE_SUBNET} and {EDGE_SUBNET6}"
+fi
+[ -f "$saved" ] || exit 0
+tunnel=
+while read -r member address; do
+	[ -n "$member" ] || continue
+	# A container, not the network that shares host's name.
+	if ! docker container inspect "$member" >/dev/null 2>&1; then
+		echo "edge: $member is gone, left off"
+		continue
+	fi
+	on=$(docker network inspect edge --format '{{{{range .Containers}}}} {{{{.Name}}}} {{{{end}}}}')
+	fixed=
+	if [ "${{address%/*}}" = {TUNNEL_SOURCE} ]; then
+		tunnel=$member
+		fixed="--ip {TUNNEL_SOURCE}"
+	fi
+	case "$on" in
+		*" $member "*) ;;
+		*) docker network connect $fixed edge "$member" ;;
+	esac
+	echo "edge: $member back"
+done < "$saved"
+if [ -n "$tunnel" ]; then
+	docker restart "$tunnel" >/dev/null
+	echo "edge: $tunnel restarted"
+fi
+rm "$saved"
 """
 
 # Runs on the node with INTERNAL_TOKEN on stdin, keeping whatever else Caddy's secret.env holds.
@@ -193,10 +251,10 @@ PRIVATE_SCOPES = "ledger"
 RELAY_SECRETS = ("HOST_READ_TOKEN", "RELAY_SECRET")
 
 # Runs on the node with RELAY_SECRET, HOST_READ_TOKEN, RELAY_PEERS, the node's slot, the grants it
-# needs, PRIVATE_SCOPES, what it emulates, where its canary is and its tunnel's protocol on stdin, a
-# line each. Values travel by stdin and environment only, never argv. A file is replaced only when
-# its content differs, and what it holds besides the keys named is kept. Prints `secret`, `host`
-# and `tunnel` each with its state: current, changed or absent.
+# needs, PRIVATE_SCOPES, what it emulates, where its canary is, and its tunnel's protocol and IP
+# version on stdin, a line each. Values travel by stdin and environment only, never argv. A file is
+# replaced only when its content differs, and what it holds besides the keys named is kept. Prints
+# `secret`, `host` and `tunnel` each with its state: current, changed or absent.
 RELAY = r"""set -eu
 umask 077
 read -r secret
@@ -208,6 +266,7 @@ read -r scopes
 read -r emulate
 read -r canary
 read -r protocol
+read -r version
 upsert() {
 	file=$1
 	shift
@@ -251,18 +310,27 @@ else
 fi
 tunnel=/data/apps/tunnel
 file=$tunnel/config.env
-if [ -n "$protocol" ]; then
-	[ -d "$tunnel" ] || btrfs subvolume create "$tunnel" >/dev/null
-	echo "tunnel $(upsert "$file" "TUNNEL_TRANSPORT_PROTOCOL=$protocol")"
-elif [ -f "$file" ] && grep -q '^TUNNEL_TRANSPORT_PROTOCOL=' "$file"; then
-	grep -v '^TUNNEL_TRANSPORT_PROTOCOL=' "$file" > "$file.new" || true
-	chown root:root "$file.new"
-	chmod 600 "$file.new"
-	mv "$file.new" "$file"
-	echo "tunnel changed"
-else
-	echo "tunnel current"
-fi
+# One of the tunnel's settings: written where the node names it, taken out where it no longer does.
+setting() {
+	if [ -n "$2" ]; then
+		[ -d "$tunnel" ] || btrfs subvolume create "$tunnel" >/dev/null
+		upsert "$file" "$1=$2"
+	elif [ -f "$file" ] && grep -q "^$1=" "$file"; then
+		grep -v "^$1=" "$file" > "$file.new" || true
+		chown root:root "$file.new"
+		chmod 600 "$file.new"
+		mv "$file.new" "$file"
+		echo changed
+	else
+		echo current
+	fi
+}
+protocol=$(setting TUNNEL_TRANSPORT_PROTOCOL "$protocol")
+version=$(setting TUNNEL_EDGE_IP_VERSION "$version")
+case "$protocol $version" in
+	*changed*) echo "tunnel changed" ;;
+	*) echo "tunnel current" ;;
+esac
 """
 
 # Runs on the node with the notice on stdin: POSTs it to host at its address on its own network,
@@ -508,19 +576,33 @@ def grants_refused(name, node):
 
 # The protocols cloudflared's `--protocol` takes, which a node's `tunnel_protocol` names.
 TUNNEL_PROTOCOLS = ("quic", "http2", "auto")
+# What cloudflared's `--edge-ip-version` takes, which a node's `tunnel_ip_version` names. `auto`
+# ends up IPv4 on `edge`, whose IPv6 is a unique local address, and never falls back to IPv6;
+# `6` is IPv6 alone, with no fallback to IPv4. See apps/network/tunnel/Dockerfile.
+TUNNEL_IP_VERSIONS = ("auto", "4", "6")
+
+
+def tunnel_ip_version(node):
+	"""`node`'s `tunnel_ip_version` as cloudflared reads it, 6 and "6" alike; empty for none."""
+	version = node.get("tunnel_ip_version")
+	return "" if version is None else str(version)
 
 
 def tunnel_refused(name, node):
-	"""Why `node`'s `tunnel_protocol` cannot be, or None when it is one cloudflared takes."""
+	"""Why `node`'s `tunnel_protocol` or `tunnel_ip_version` cannot be, or None when cloudflared
+	takes both."""
 	protocol = node.get("tunnel_protocol")
-	if protocol is None or protocol in TUNNEL_PROTOCOLS:
-		return None
-	return f"{name}: tunnel_protocol is one of {', '.join(TUNNEL_PROTOCOLS)}, not {protocol!r}"
+	if protocol is not None and protocol not in TUNNEL_PROTOCOLS:
+		return f"{name}: tunnel_protocol is one of {', '.join(TUNNEL_PROTOCOLS)}, not {protocol!r}"
+	version = node.get("tunnel_ip_version")
+	if version is not None and (isinstance(version, bool) or str(version) not in TUNNEL_IP_VERSIONS):
+		return f"{name}: tunnel_ip_version is one of {', '.join(TUNNEL_IP_VERSIONS)}, not {version!r}"
+	return None
 
 
 def load_nodes():
-	"""nodes.toml, every node's `domain`, `emulate`, `grants` and `tunnel_protocol`, and the one
-	canary, checked before anything is asked of a machine."""
+	"""nodes.toml, every node's `domain`, `emulate`, `grants`, `tunnel_protocol` and
+	`tunnel_ip_version`, and the one canary, checked before anything is asked of a machine."""
 	nodes = tomllib.loads((NODES / "nodes.toml").read_text())
 	checks = (domain_refused, emulation_refused, grants_refused, tunnel_refused)
 	refused = [why for name, node in nodes.items() for check in checks if (why := check(name, node))]
@@ -675,10 +757,12 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	emulate = emulated(nodes[name])
 	canary = canary_of(name, nodes)
 	protocol = nodes[name].get("tunnel_protocol", "")
-	tunnel = (
-		f"  write TUNNEL_TRANSPORT_PROTOCOL={protocol} into /data/apps/tunnel/config.env, mode 600"
-		if protocol
-		else "  take TUNNEL_TRANSPORT_PROTOCOL out of /data/apps/tunnel/config.env, so the image's applies"
+	version = tunnel_ip_version(nodes[name])
+	tunnel = "\n".join(
+		f"  write {key}={value} into /data/apps/tunnel/config.env, mode 600, if it differs"
+		if value
+		else f"  take {key} out of /data/apps/tunnel/config.env if there, so the image's applies"
+		for key, value in (("TUNNEL_TRANSPORT_PROTOCOL", protocol), ("TUNNEL_EDGE_IP_VERSION", version))
 	)
 	if dry:
 		print(
@@ -689,7 +773,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 			"  in /data/apps/host/.env, if there is one and it differs: HOST_READ_TOKEN=<redacted>\n"
 			f"    NODE_SLOT={slot} PRIVATE_SCOPES={PRIVATE_SCOPES} EMULATE='{emulate}' CANARY={canary}\n"
 			f"    and {wanted} added to GRANTS, the pairs already there kept\n"
-			f"{tunnel}, if it differs"
+			f"{tunnel}"
 			+ ("\n  if host's .env changed, ask keeper to recreate host on it, as recreate-host does"
 				"\n  if the tunnel's config.env changed, redeploy the tunnel to read it"
 				if recreate else "")
@@ -697,7 +781,7 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 		return True
 	stdin = (
 		f"{secrets_['RELAY_SECRET']}\n{secrets_['HOST_READ_TOKEN']}\n{peers}\n"
-		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n"
+		f"{slot}\n{wanted}\n{PRIVATE_SCOPES}\n{emulate}\n{canary}\n{protocol}\n{version}\n"
 	)
 	answer = ssh_output(where, f"sh -c {shlex.quote(RELAY)}", stdin)
 	if answer is None:
@@ -727,6 +811,15 @@ def relay(where, name, nodes, peers, secrets_, dry, recreate=True):
 	elif states.get("tunnel") == "changed":
 		print(f"node: {name}: the tunnel's config.env changed; `node redeploy {name} tunnel` reads it")
 	return True
+
+
+def edge_plan():
+	"""What EDGE does, as a dry run says it."""
+	return (
+		f"  make `edge` at {EDGE_SUBNET} and {EDGE_SUBNET6} unless it is there; one at {EDGE_SUBNET}\n"
+		"    alone is made again: its containers taken off and put back, the tunnel at\n"
+		f"    {TUNNEL_SOURCE}, then the tunnel restarted"
+	)
 
 
 def environment(name, nodes, token, read_token):
@@ -781,8 +874,9 @@ def start_host(name, run, dry):
 	if dry:
 		print(
 			f"node: would, on root@{name}:\n"
-			f"  check /data is mounted; make `edge` at {EDGE_SUBNET} unless it is there\n"
+			"  check /data is mounted\n"
 			"  make the subvolumes /data/apps/host and /data/apps/caddy unless they are there\n"
+			f"{edge_plan()}\n"
 			"  write /data/apps/caddy/secret.env, mode 600: INTERNAL_TOKEN from secrets.json\n"
 			f"  load {artifact} from run {run}, downloaded here by gh, as host:local\n"
 			f"  write /data/apps/host/docker-compose.yml from {COMPOSE.relative_to(ROOT)}\n"
@@ -803,6 +897,8 @@ def start_host(name, run, dry):
 
 	if ssh(name, "sh -s", PREPARE) != 0:
 		sys.exit(f"node: preparing {name} failed")
+	if ssh(name, "sh -s", EDGE) != 0:
+		sys.exit(f"node: making `edge` on {name} failed")
 	secret = os.environ["INTERNAL_TOKEN"] + "\n"
 	state = ssh_output(name, f"sh -c {shlex.quote(CADDY_SECRET)}", secret)
 	if state is None:
@@ -878,6 +974,7 @@ def main():
 		where = address or name
 		if dry:
 			print(f"# node {name}, {node['system']}, at root@{where}\n{script(name, node, proxies)}")
+			print(f"node: {name}: would, on root@{where}:\n{edge_plan()}")
 			relay(where, name, nodes, peers, shared, dry)
 			continue
 		print(f"node: {name} at root@{where}")
@@ -887,6 +984,11 @@ def main():
 		# A new session, over the tailnet, is what the firewall has to let through.
 		if ssh(where, "touch /run/node-firewall.ok") != 0:
 			print(f"node: {name} refused a second session; its firewall comes down in {GUARD_SECONDS}s")
+			failed.append(name)
+			continue
+		# Before the relay's step, which may redeploy the tunnel onto it.
+		if ssh(where, "sh -s", EDGE) != 0:
+			print(f"node: {name}: making `edge` failed")
 			failed.append(name)
 			continue
 		if not relay(where, name, nodes, peers, shared, dry):
