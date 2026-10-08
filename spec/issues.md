@@ -44,3 +44,17 @@ made to read its new `.env` by sending each the last infra run again by hand, wh
 replacement of host by the same image. Whether the node task asks keeper for that itself, keeper
 gains a route that replaces host by the image it already runs, or host reads its grants from a file
 it watches, is undecided.
+
+## An app reaches an app on another node only by a tailnet address
+
+Found on 2026-10-08, when cue's `qq` on `sha` had to reach its `hub` on `tyo` over a long-lived
+WebSocket: nothing names an app across nodes. The only way that works is the `peer` role -- the
+hub's port published on `tyo`'s tailnet address, admitted from the tailnet alone -- with that address
+written into `qq`'s `config.env`, so the hub moving to another node is an edit by hand. `peer` was
+meant for an app talking to itself on other nodes, and is borrowed here. The private suffix does not
+help: `internal.ixc.one` is answered by the house's resolver with the house's node, for the LAN.
+What deciding it involves: a name each app is reached by from any node -- a proxy on every node by
+app name, as `primary` is for the database, or the private suffix resolved on every node to the
+tailnet address of the node an app runs on -- fed by the same knowledge of which node runs what that
+the public router needs (platform's `spec/todo/todo.md`, "Every node's interface is public through
+one Worker").
