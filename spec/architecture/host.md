@@ -450,11 +450,13 @@ rejected: a bad `.env` that crashed it would leave nothing outside it to replace
 
 **A new host, keeper or Caddy reaches the canary first.** Those three are the door every notice
 comes through, and a door that breaks on all seven nodes at once -- as one did on 2026-10-07 --
-leaves nothing to deliver the fix. So one node, nrt, is the canary: `canary = true` in
-`nodes.toml`, on exactly one node, which `mise run node` checks and writes into host's `.env` as
-`CANARY` -- `self` on nrt, nrt's tailnet IPv4 on every other node. nrt is neither core nor short of
-IPv4, an ordinary cloud node like most; a Caddy change that breaks only rdu's LAN side passes it,
-and one broken node instead of seven is still the gain.
+leaves nothing to deliver the fix. So one node, nrt, is the canary: `canary = true` in `nodes.toml`,
+on exactly one node, which `mise run node` checks and writes into host's `.env` as `CANARY` --
+`self` on nrt, nrt's tailnet IPv4 on every other node. nrt is neither core nor short of IPv4, an
+ordinary cloud node like most; a Caddy change that breaks only rdu's LAN side passes it, and one
+broken node instead of seven is still the gain. A new relay is held with them, so that the rest,
+restarting after nrt, announce their leaving to a relay already back -- platform's
+`spec/architecture/relay.md`, "A node says it is leaving before it goes".
 
 - **The canary takes such a run as it comes.** Every other node holds it: keeper before replacing
   host, and host for the whole run, each of its apps a row in stage `waiting`.
@@ -518,6 +520,12 @@ start. `/data` keeps `nofail` in fstab, so a node with a failed disk still boots
 and a drop-in gives the Docker unit `RequiresMountsFor=/data`, so it waits for the mount and does
 not start without it. Nothing needs starting in order beyond that: every container restarts on its
 own policy, and Caddy starts from the file host last wrote whether or not host is up yet.
+
+**Docker stops before the tailnet does.** The same drop-in orders the Docker unit after
+`tailscaled`, so on a reboot every container is stopped while the tailnet is still up, and a relay's
+last snapshot, saying it is leaving, reaches its neighbors -- platform's
+`spec/architecture/relay.md`, "A node says it is leaving before it goes". Alpine's OpenRC is given
+the same order. Decided with the author on 2026-10-09.
 
 ### Caddy is deployed like any app, and is the one door
 
