@@ -747,7 +747,9 @@ alone and edited over SSH:
 
 They sit in the app's subvolume, so the snapshot a deploy takes holds them, and a failed deploy put
 back puts the environment back with the code. A change applies when the container is next started
-from its version, which a redeploy does.
+from its version, which a redeploy does. **A restart does not**: Docker fixes a container's
+environment when it is created, so a restarted one keeps the old value -- the deployer on `tyo`
+went on presenting a replaced GitHub token on 2026-10-09 until it was redeployed.
 
 **host adds one variable of its own, `NODE`, the node's name**, over whatever the two files say, so
 an app knows where it runs without being told per node -- the probe records it as the place it
