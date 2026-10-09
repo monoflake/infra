@@ -58,3 +58,14 @@ app name, as `primary` is for the database, or the private suffix resolved on ev
 tailnet address of the node an app runs on -- fed by the same knowledge of which node runs what that
 the public router needs (platform's `spec/todo/todo.md`, "Every node's interface is public through
 one Worker").
+
+## Catch-up stops after a run placed elsewhere
+
+buf's host took no run's notice for 25 hours on 2026-10-08 and 09: its log has no catch-up line
+between 06:46Z, when it took run 37738953167 of `canmi21/cue` by `from_run` and wrote no row, and
+its restart at 08:00Z the next day, when it caught up thirteen runs in seven seconds and again wrote
+none for the one it took by `from_run`. `every` awaits each pass in turn and `take` awaits
+`from_run`, in `apps/deploy/host/src/rollout/catch_up.rs`; the reading is that `from_run` does not
+return for a run whose app is placed on another node, and catch-up stalls until host restarts.
+Inferred from the log, not reproduced. Open: confirm it, and whether a pass gets a deadline, a take
+that writes no row is an error, or both.
