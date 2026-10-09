@@ -79,6 +79,8 @@ echo UTC > /etc/timezone
 sshd -t && rc-service --quiet sshd reload
 command -v nft >/dev/null || apk add --quiet nftables
 grep -q '^rc_need="data-mount"' /etc/conf.d/docker || echo 'rc_need="data-mount"' >> /etc/conf.d/docker
+# Docker stops before the tailnet does: spec/architecture/host.md.
+grep -q '^rc_after="tailscale"' /etc/conf.d/docker || echo 'rc_after="tailscale"' >> /etc/conf.d/docker
 rc-update add data-mount default >/dev/null
 rc-update add node-firewall boot >/dev/null
 """,

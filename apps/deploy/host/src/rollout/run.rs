@@ -84,8 +84,8 @@ pub async fn from_run(
 		// Not taken, so the notice keeper sends afterwards is.
 		return false;
 	}
-	// A new host, keeper or Caddy reaches the canary first, and so does a declaration of one that
-	// restarts it; deployed by hand, it goes now.
+	// A new host, keeper, Caddy or relay reaches the canary first, and so does a declaration of one
+	// that restarts it; deployed by hand, it goes now.
 	let mut waiting = HashMap::new();
 	let apps: Vec<&str> = artifacts
 		.iter()

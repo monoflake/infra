@@ -1,14 +1,17 @@
-//! A new host, keeper or Caddy reaches one node first. The canary takes such a run as it comes;
-//! every other node holds it and asks the canary, over the tailnet, until the canary's verdict on
-//! it passes, fails, or a deadline does. See spec/architecture/host.md, "A new host, keeper or
-//! Caddy reaches the canary first".
+//! A new host, keeper, Caddy or relay reaches one node first. The canary takes such a run as it
+//! comes; every other node holds it and asks the canary, over the tailnet, until the canary's
+//! verdict on it passes, fails, or a deadline does. See spec/architecture/host.md, "A new host,
+//! keeper or Caddy reaches the canary first".
 
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::time::Duration;
 
-/// Infra's own three, any of which a run that built it puts on the canary first.
-pub const GATED: [&str; 3] = ["host", "keeper", "caddy"];
+/// Infra's own three, and the platform's relay, any of which a run that built it puts on the
+/// canary first. The relay is held with them so that every other node announces its leaving to a
+/// relay already back: platform's spec/architecture/relay.md, "A node says it is leaving before it
+/// goes".
+pub const GATED: [&str; 4] = ["host", "keeper", "caddy", "relay"];
 
 /// How long a node holds a run for the canary before it passes the run over.
 pub const DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
@@ -239,13 +242,18 @@ mod tests {
 	}
 
 	#[test]
-	fn only_a_run_that_built_host_keeper_or_caddy_is_held() {
+	fn only_a_run_that_built_host_keeper_caddy_or_relay_is_held() {
 		assert!(gated(["geo", "caddy"].into_iter()));
 		assert!(gated(["keeper"].into_iter()));
-		assert!(!gated(["geo", "meter", "tunnel", "resolver"].into_iter()));
+		assert!(gated(["geo", "relay"].into_iter()));
+		assert!(!gated(["geo", "meter", "tunnel", "resolver", "cron"].into_iter()));
 		assert_eq!(
 			path("monoflake/infra", 42, &["caddy", "keeper"]),
 			"/api/runs/monoflake/infra/42?built=caddy,keeper"
+		);
+		assert_eq!(
+			path("monoflake/platform", 7, &["relay"]),
+			"/api/runs/monoflake/platform/7?built=relay"
 		);
 	}
 }

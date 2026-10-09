@@ -320,8 +320,8 @@ struct Built {
 	built: String,
 }
 
-/// The canary's verdict on a run, which every other node asks before it takes a new host, keeper
-/// or Caddy. Answered on the canary alone. See canary.rs and deploy::canary.
+/// The canary's verdict on a run, which every other node asks before it takes a new host, keeper,
+/// Caddy or relay. Answered on the canary alone. See canary.rs and deploy::canary.
 async fn run_verdict(
 	State(host): State<Arc<Host>>,
 	Path((owner, name, run)): Path<(String, String, u64)>,
@@ -332,7 +332,7 @@ async fn run_verdict(
 	}
 	let built: Vec<&str> = asked.built.split(',').filter(|app| !app.is_empty()).collect();
 	if built.is_empty() || !built.iter().all(|app| deploy::canary::GATED.contains(app)) {
-		let why = "`built` names one or more of host, keeper and caddy";
+		let why = "`built` names one or more of host, keeper, caddy and relay";
 		return failed(StatusCode::BAD_REQUEST, "invalid_name", why);
 	}
 	let repository = format!("{owner}/{name}");
@@ -1244,6 +1244,10 @@ mod tests {
 		let state =
 			|envelope: &serde_json::Value| envelope["data"]["state"].as_str().unwrap().to_owned();
 		let (status, envelope) = read(canary.clone(), path).await;
+		assert_eq!((status, state(&envelope).as_str()), (200, "pending"));
+		// The platform's relay is asked about as infra's own three are.
+		let relay = "/api/runs/monoflake/platform/7?built=relay";
+		let (status, envelope) = read(canary.clone(), relay).await;
 		assert_eq!((status, state(&envelope).as_str()), (200, "pending"));
 
 		// Deployed by the run, and answering its health on its socket, as Caddy's is asked.

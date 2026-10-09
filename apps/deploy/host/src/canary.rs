@@ -1,5 +1,5 @@
-//! The canary's side of a new host, keeper or Caddy reaching one node first: its verdict on a run,
-//! read from its own history and its apps' health now. The asking side is deploy::canary.
+//! The canary's side of a new host, keeper, Caddy or relay reaching one node first: its verdict on
+//! a run, read from its own history and its apps' health now. The asking side is deploy::canary.
 
 use crate::Host;
 use crate::store::{self, Action, Event, Outcome, Store, UNCHANGED};
@@ -132,5 +132,35 @@ mod tests {
 			failed.why.as_deref(),
 			Some("`host` failed on the canary: not healthy within 60 seconds")
 		);
+	}
+
+	#[test]
+	fn a_platform_run_that_built_the_relay_is_judged_by_the_relay_of_that_run() {
+		let directory = tempfile::tempdir().unwrap();
+		let store = Store::open(directory.path()).unwrap();
+		let platform = Source::run(7, None).of("monoflake/platform");
+		let starting = Some(Stage::Starting);
+		let judge = || judged(&store, "monoflake/platform", 7, &["relay"]).unwrap();
+
+		// infra's run 7 is not platform's.
+		let infra = Source::run(7, None).of("monoflake/infra");
+		let other = store.record("relay", Action::Deploy, &infra, None, Outcome::Running, starting);
+		store.finish(other.unwrap(), Outcome::Succeeded, None, None).unwrap();
+		assert!(judge().unwrap().why.unwrap().contains("has not taken `relay` of run 7"));
+
+		let relay = store.record("relay", Action::Deploy, &platform, None, Outcome::Running, starting);
+		let relay = relay.unwrap();
+		assert!(judge().unwrap().why.unwrap().contains("`relay` is still being deployed"));
+		store.finish(relay, Outcome::Failed, None, Some("not healthy within 60 seconds")).unwrap();
+		let failed = judge().unwrap();
+		assert_eq!(failed.state, State::Failed);
+		assert_eq!(
+			failed.why.as_deref(),
+			Some("`relay` failed on the canary: not healthy within 60 seconds")
+		);
+
+		let again = store.record("relay", Action::Deploy, &platform, None, Outcome::Running, starting);
+		store.finish(again.unwrap(), Outcome::Succeeded, None, None).unwrap();
+		assert_eq!(judge(), None);
 	}
 }
